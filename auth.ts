@@ -7,7 +7,10 @@ import Google from "next-auth/providers/google";
 
 import { db } from "./db";
 import { users } from "./db/schema";
-import { decrypt, encrypt } from "./lib/crypto";
+import { encrypt } from "./lib/crypto";
+import { refreshGoogleToken } from "./lib/google-token";
+
+export { refreshGoogleToken } from "./lib/google-token";
 
 declare module "next-auth" {
   interface Session {
@@ -37,11 +40,6 @@ type GoogleTokens = {
   refresh_token?: string | null;
   /** Absolute expiry timestamp in seconds since epoch (matches Auth.js `account.expires_at`). */
   expires_at: number;
-};
-
-export type UserTokenRow = {
-  id: string;
-  googleRefreshToken: string | null;
 };
 
 /**
@@ -82,51 +80,6 @@ export async function upsertUserFromGoogleProfile(
     .returning({ id: users.id });
 
   return row;
-}
-
-/**
- * Attempts to refresh a user's Google access token using their stored refresh
- * token. Never throws: on any failure (revoked/expired refresh token, network
- * error, non-2xx response) it returns `needsGoogleReconnect: true` so callers
- * can surface a reconnect banner instead of crashing.
- *
- * On success, `expiresAt` is the new absolute expiry as epoch seconds (matching
- * the shape `upsertUserFromGoogleProfile` expects), so callers can persist the
- * refreshed access token and expiry instead of discarding them.
- */
-export async function refreshGoogleToken(
-  user: UserTokenRow,
-): Promise<{ accessToken: string; needsGoogleReconnect: boolean; expiresAt?: number }> {
-  try {
-    if (!user.googleRefreshToken) {
-      throw new Error("No Google refresh token stored for this user");
-    }
-
-    const refreshToken = decrypt(user.googleRefreshToken);
-
-    const response = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID ?? "",
-        client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Google token refresh failed with status ${response.status}`);
-    }
-
-    const data = (await response.json()) as { access_token: string; expires_in?: number };
-    const expiresAt = Math.floor(Date.now() / 1000) + (data.expires_in ?? 3600);
-
-    return { accessToken: data.access_token, needsGoogleReconnect: false, expiresAt };
-  } catch (error) {
-    console.error("Google access token refresh failed:", error);
-    return { accessToken: "", needsGoogleReconnect: true };
-  }
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({

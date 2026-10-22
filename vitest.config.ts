@@ -6,5 +6,10 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./tests/setup.ts"],
+    server: {
+      deps: {
+        inline: ["next-auth", "@auth/core"],
+      },
+    },
   },
 });

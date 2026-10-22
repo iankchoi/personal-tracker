@@ -283,6 +283,11 @@ a { color: inherit; text-decoration: none; }
 .src.cal { background: var(--cal-bg); color: var(--cal-ink); }
 .src.wk { background: var(--wk-bg); color: var(--wk-ink); }
 .src.bday { background: var(--rem-bg); color: var(--rem-ink); }
+/* ---- calendar color tokens (Task 4's CalendarColorToken): one modifier per token, matching the .wg-event/.wg-chip/.mg-chip pattern above ---- */
+.src.rem { background: var(--rem-bg); color: var(--rem-ink); }
+.src.note { background: var(--note-bg); color: var(--note-ink); }
+.src.jour { background: var(--jour-bg); color: var(--jour-ink); }
+.src.cv { background: var(--cv-bg); color: var(--cv-ink); }
 
 .empty-block { display: flex; align-items: center; justify-content: center; min-height: 90px; border: 1px dashed var(--control); border-radius: 8px; color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
 

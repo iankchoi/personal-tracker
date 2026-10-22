@@ -54,4 +54,10 @@ describe("calendar-ranges", () => {
   test("navigateDate('agenda', ..., 'next') moves forward 14 days", () => {
     expect(navigateDate("agenda", new Date(2026, 9, 22), "next")).toEqual(new Date(2026, 10, 5));
   });
+
+  test("navigateDate('month', ..., 'next') clamps into a shorter target month instead of rolling over", () => {
+    // Jan 31, 2026 + 1 month must land in February, clamped to Feb 28 (2026 is not
+    // a leap year) — not overflow past February into March.
+    expect(navigateDate("month", new Date(2026, 0, 31), "next")).toEqual(new Date(2026, 1, 28));
+  });
 });

@@ -41,9 +41,17 @@ function addDays(date: Date, days: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
 
-/** Adds (or subtracts) whole calendar months, keeping the same day-of-month. */
+/**
+ * Adds (or subtracts) whole calendar months, keeping the same day-of-month when
+ * possible. If the target month is shorter (e.g. Jan 31 + 1 month), clamps to the
+ * target month's last day instead of rolling over into the following month.
+ */
 function addMonths(date: Date, months: number): Date {
-  return new Date(date.getFullYear(), date.getMonth() + months, date.getDate());
+  const targetYear = date.getFullYear();
+  const targetMonth = date.getMonth() + months;
+  const lastDayOfTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const day = Math.min(date.getDate(), lastDayOfTargetMonth);
+  return new Date(targetYear, targetMonth, day);
 }
 
 function formatFullDayLabel(date: Date): string {

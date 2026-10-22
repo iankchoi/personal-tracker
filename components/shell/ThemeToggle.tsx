@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Theme = "light" | "dark";
 
@@ -17,7 +17,21 @@ function readCurrentTheme(): Theme {
  * no-FOUC inline script reads on the next page load.
  */
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(readCurrentTheme);
+  // Seed with a stable default so the server-rendered output and the initial
+  // client render agree (both "light"), then read the real DOM-derived theme
+  // in an effect after mount. Reading the DOM in the `useState` initializer
+  // would run during SSR (no real theme, defaults to "light") and again on
+  // client hydration (where the inline no-FOUC script may have already set
+  // `data-theme="dark"`), producing a server/client label text mismatch that
+  // React flags as a hydration error on every dark-mode load. The colors
+  // don't depend on this — they come from CSS driven by `data-theme` on
+  // `<html>`, set by the inline script before paint, regardless of when
+  // React catches up.
+  const [theme, setTheme] = useState<Theme>("light");
+
+  useEffect(() => {
+    setTheme(readCurrentTheme());
+  }, []);
 
   function handleClick() {
     const next: Theme = theme === "dark" ? "light" : "dark";

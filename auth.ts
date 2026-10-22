@@ -150,8 +150,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // First sign-in: Google returns `account` (tokens) and `profile` (user info).
       if (account && profile?.email) {
         if (!account.access_token) {
+          // Log only a non-secret identifier and the object's shape — never
+          // the account object itself, which carries `refresh_token` and
+          // `id_token` when present. Logging those would write plaintext
+          // Google OAuth credentials to server logs (log drains, retention,
+          // dashboard access), exactly what the "tokens are never stored in
+          // plaintext" constraint exists to prevent.
           console.error(
-            `Google sign-in for ${profile.email} returned no access_token; account object: ${JSON.stringify(account)}`,
+            `Google sign-in for ${profile.email} returned no access_token; account keys: ${Object.keys(account).join(", ")}`,
           );
         }
 
@@ -171,8 +177,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
 
       // Subsequent requests: only hit the DB/refresh endpoint once our cached
-      // expiry has actually passed, instead of on every single request.
-      if (token.userId && token.googleTokenExpiresAt && token.googleTokenExpiresAt <= Date.now()) {
+      // expiry has actually passed, instead of on every single request. Once
+      // a refresh attempt has already failed (`needsGoogleReconnect`), skip
+      // retrying on every subsequent request — a revoked/expired refresh
+      // token won't start working on its own, so retrying would mean a
+      // failed DB read + a failed POST to Google on every request forever.
+      // The user has to actively reconnect (the "Reconnect Google" button in
+      // Settings, which calls `signIn("google")` again) to clear the flag
+      // and get a fresh token.
+      if (
+        token.userId &&
+        !token.needsGoogleReconnect &&
+        token.googleTokenExpiresAt &&
+        token.googleTokenExpiresAt <= Date.now()
+      ) {
         const [dbUser] = await db
           .select()
           .from(users)

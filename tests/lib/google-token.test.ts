@@ -6,7 +6,7 @@ import { users } from "../../db/schema";
 import { decrypt, encrypt } from "../../lib/crypto";
 import { getGoogleAccessToken } from "../../lib/google-token";
 
-const testEmails = ["fresh@test.com", "expired@test.com", "revoked@test.com"];
+const testEmails = ["fresh@test.com", "expired@test.com", "revoked@test.com", "corrupted@test.com"];
 
 afterAll(async () => {
   for (const email of testEmails) {
@@ -57,6 +57,19 @@ test("getGoogleAccessToken reports needsGoogleReconnect when refresh fails, with
     googleAccessToken: encrypt("stale-token"),
     googleRefreshToken: encrypt("revoked-refresh-token"),
     googleTokenExpiresAt: new Date(Date.now() - 1000),
+  }).returning();
+
+  const result = await getGoogleAccessToken(user.id);
+
+  expect(result).toEqual({ accessToken: null, needsGoogleReconnect: true });
+});
+
+test("getGoogleAccessToken reports needsGoogleReconnect instead of throwing when the stored access token is corrupted", async () => {
+  const [user] = await db.insert(users).values({
+    email: "corrupted@test.com",
+    googleAccessToken: "not-validly-encrypted-data",
+    googleRefreshToken: encrypt("refresh-token"),
+    googleTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
   }).returning();
 
   const result = await getGoogleAccessToken(user.id);

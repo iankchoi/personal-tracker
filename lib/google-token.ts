@@ -58,9 +58,11 @@ export async function refreshGoogleToken(
  * The single chokepoint for getting a valid Google access token for a user.
  * Returns the stored token if it hasn't expired yet; otherwise refreshes it
  * via `refreshGoogleToken` and persists the refreshed token/expiry before
- * returning it. Never throws: a missing token or a failed refresh both
- * resolve to `{ accessToken: null, needsGoogleReconnect: true }` so callers
- * can surface a reconnect prompt instead of crashing.
+ * returning it. Never throws: a missing token, a failed refresh, a DB error,
+ * or corrupted/undecryptable stored ciphertext all resolve to
+ * `{ accessToken: null, needsGoogleReconnect: true }` so callers (including
+ * the Calendar page, which calls this directly) can surface a reconnect
+ * prompt instead of crashing.
  */
 export async function getGoogleAccessToken(
   userId: string,
@@ -68,32 +70,37 @@ export async function getGoogleAccessToken(
   | { accessToken: string; needsGoogleReconnect: false }
   | { accessToken: null; needsGoogleReconnect: true }
 > {
-  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  try {
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
 
-  if (!user || !user.googleAccessToken) {
+    if (!user || !user.googleAccessToken) {
+      return { accessToken: null, needsGoogleReconnect: true };
+    }
+
+    if (user.googleTokenExpiresAt && user.googleTokenExpiresAt.getTime() > Date.now()) {
+      return { accessToken: decrypt(user.googleAccessToken), needsGoogleReconnect: false };
+    }
+
+    const refreshed = await refreshGoogleToken({
+      id: user.id,
+      googleRefreshToken: user.googleRefreshToken,
+    });
+
+    if (refreshed.accessToken && refreshed.expiresAt) {
+      await db
+        .update(users)
+        .set({
+          googleAccessToken: encrypt(refreshed.accessToken),
+          googleTokenExpiresAt: new Date(refreshed.expiresAt * 1000),
+        })
+        .where(eq(users.id, user.id));
+
+      return { accessToken: refreshed.accessToken, needsGoogleReconnect: false };
+    }
+
+    return { accessToken: null, needsGoogleReconnect: true };
+  } catch (error) {
+    console.error("getGoogleAccessToken failed:", error);
     return { accessToken: null, needsGoogleReconnect: true };
   }
-
-  if (user.googleTokenExpiresAt && user.googleTokenExpiresAt.getTime() > Date.now()) {
-    return { accessToken: decrypt(user.googleAccessToken), needsGoogleReconnect: false };
-  }
-
-  const refreshed = await refreshGoogleToken({
-    id: user.id,
-    googleRefreshToken: user.googleRefreshToken,
-  });
-
-  if (refreshed.accessToken && refreshed.expiresAt) {
-    await db
-      .update(users)
-      .set({
-        googleAccessToken: encrypt(refreshed.accessToken),
-        googleTokenExpiresAt: new Date(refreshed.expiresAt * 1000),
-      })
-      .where(eq(users.id, user.id));
-
-    return { accessToken: refreshed.accessToken, needsGoogleReconnect: false };
-  }
-
-  return { accessToken: null, needsGoogleReconnect: true };
 }

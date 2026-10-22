@@ -40,7 +40,7 @@ export default async function SettingsAccountPage() {
             <form
               action={async () => {
                 "use server";
-                await signIn("google");
+                await signIn("google", { redirectTo: "/settings/account" });
               }}
             >
               <button className="btn-outline" type="submit">

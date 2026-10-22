@@ -93,7 +93,10 @@ function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalend
  * `.agenda-group`s (one per day in the 14-day agenda window that has at
  * least one event; days with zero events are skipped entirely, matching the
  * mockup) paired with an `.agenda-rail` reusing `MiniMonth` (Task 8) and
- * `CalendarsLegend` (Task 8).
+ * `CalendarsLegend` (Task 8). Unlike Day/Week/Month, Agenda is a pure list
+ * region with no grid to fall back on, so when every day in the window has
+ * zero events, `.agenda-col` renders a single `.empty-block` in place of its
+ * (otherwise empty) groups — the rail keeps rendering normally either way.
  *
  * `MiniMonth`'s `inRangeStart`/`inRangeEnd` are taken directly from
  * `getViewRange("agenda", referenceDate)` (lib/calendar-ranges.ts) so the
@@ -129,31 +132,35 @@ export function AgendaView({
   return (
     <div className="agenda-layout">
       <div className="agenda-col">
-        {groups.map(({ day, dayEvents }) => (
-          <div className="agenda-group" key={day.getTime()}>
-            <div className="agenda-date">
-              {formatGroupLabel(day, today)}
-              <span className="sub">{formatGroupSub(day, today)}</span>
-            </div>
-            <div className="cards">
-              {dayEvents.map((event) => {
-                const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
-                const timeLabel = event.start.dateTime
-                  ? formatTimeLabel(new Date(event.start.dateTime))
-                  : "All day";
-                const calendarName = calendarNameById.get(event.calendarId) ?? "";
+        {groups.length === 0 ? (
+          <div className="empty-block">No events scheduled for the next 14 days.</div>
+        ) : (
+          groups.map(({ day, dayEvents }) => (
+            <div className="agenda-group" key={day.getTime()}>
+              <div className="agenda-date">
+                {formatGroupLabel(day, today)}
+                <span className="sub">{formatGroupSub(day, today)}</span>
+              </div>
+              <div className="cards">
+                {dayEvents.map((event) => {
+                  const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+                  const timeLabel = event.start.dateTime
+                    ? formatTimeLabel(new Date(event.start.dateTime))
+                    : "All day";
+                  const calendarName = calendarNameById.get(event.calendarId) ?? "";
 
-                return (
-                  <div className="rowcard" key={event.id}>
-                    <span className="time">{timeLabel}</span>
-                    <span className="title">{event.summary}</span>
-                    <span className={`src ${colorToken}`}>{calendarName}</span>
-                  </div>
-                );
-              })}
+                  return (
+                    <div className="rowcard" key={event.id}>
+                      <span className="time">{timeLabel}</span>
+                      <span className="title">{event.summary}</span>
+                      <span className={`src ${colorToken}`}>{calendarName}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
       <div className="agenda-rail">
         <MiniMonth referenceDate={referenceDate} selectedDate={referenceDate} inRangeStart={start} inRangeEnd={end} />

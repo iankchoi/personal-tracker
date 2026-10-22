@@ -60,25 +60,6 @@ function eventStart(event: GoogleCalendarEvent): Date {
   return event.start.dateTime ? new Date(event.start.dateTime) : new Date(`${event.start.date}T00:00:00`);
 }
 
-/** The moment an event ends, whether it's timed (`dateTime`) or all-day (`date`, exclusive). */
-function eventEnd(event: GoogleCalendarEvent): Date {
-  if (event.end.dateTime) return new Date(event.end.dateTime);
-  if (event.end.date) return new Date(`${event.end.date}T00:00:00`);
-  return addDays(eventStart(event), 1);
-}
-
-/**
- * Whether `event` overlaps `[rangeStart, rangeEnd)` at all — not merely
- * whether its start falls inside the range. This matters for multi-day
- * all-day events (e.g. a 3-day trip) that start before the range but still
- * span into it; a start-only check would wrongly treat such a day as empty.
- */
-function eventOverlapsRange(event: GoogleCalendarEvent, rangeStart: Date, rangeEnd: Date): boolean {
-  const start = eventStart(event);
-  const end = eventEnd(event);
-  return start.getTime() < rangeEnd.getTime() && end.getTime() > rangeStart.getTime();
-}
-
 export default async function CalendarPage({
   searchParams,
 }: {
@@ -148,22 +129,12 @@ export default async function CalendarPage({
     );
   }
 
-  // Events that actually fall within the view's own range (as opposed to the
-  // possibly-wider `fetchRange`) — used to decide whether to show the
-  // `.empty-block` state and, for Day view, to build the "Up next" rail from
-  // everything after the viewed day.
-  const rangeEvents = allEvents.filter((event) => eventOverlapsRange(event, range.start, range.end));
-  const isEmpty = rangeEvents.length === 0;
-
-  if (isEmpty) {
-    return (
-      <div className="cal-col">
-        <CalendarToolbar view={view} date={date} />
-        <div className="empty-block">No events scheduled for this range.</div>
-      </div>
-    );
-  }
-
+  // A Week/Day/Month/Agenda grid with zero events for the viewed range is a
+  // normal, expected state (just an empty grid/rail) — not a broken page —
+  // so there's no page-level "is this range empty" check here. Agenda is the
+  // one exception: it's a pure list region with no grid to fall back on, so
+  // it renders its own `.empty-block` internally when it has nothing to show
+  // (see AgendaView.tsx).
   return (
     <div className="cal-col">
       <CalendarToolbar view={view} date={date} />

@@ -187,13 +187,13 @@ a { color: inherit; text-decoration: none; }
 .wg-event.pers { background: var(--cal-bg); color: var(--cal-ink); border-left: 3px solid var(--cal-accent); }
 .wg-event.work { background: var(--wk-bg); color: var(--wk-ink); border-left: 3px solid var(--wk-accent); }
 .wg-chip.bday { background: var(--rem-bg); color: var(--rem-ink); }
-/* ---- calendar color tokens (Task 4's CalendarColorToken): one modifier per token, applied directly to .wg-event/.wg-chip ---- */
-.wg-event.cal, .wg-chip.cal { background: var(--cal-bg); color: var(--cal-ink); }
-.wg-event.wk, .wg-chip.wk { background: var(--wk-bg); color: var(--wk-ink); }
-.wg-event.rem, .wg-chip.rem { background: var(--rem-bg); color: var(--rem-ink); }
-.wg-event.note, .wg-chip.note { background: var(--note-bg); color: var(--note-ink); }
-.wg-event.jour, .wg-chip.jour { background: var(--jour-bg); color: var(--jour-ink); }
-.wg-event.cv, .wg-chip.cv { background: var(--cv-bg); color: var(--cv-ink); }
+/* ---- calendar color tokens (Task 4's CalendarColorToken): one modifier per token, applied directly to .wg-event/.wg-chip/.mg-chip ---- */
+.wg-event.cal, .wg-chip.cal, .mg-chip.cal { background: var(--cal-bg); color: var(--cal-ink); }
+.wg-event.wk, .wg-chip.wk, .mg-chip.wk { background: var(--wk-bg); color: var(--wk-ink); }
+.wg-event.rem, .wg-chip.rem, .mg-chip.rem { background: var(--rem-bg); color: var(--rem-ink); }
+.wg-event.note, .wg-chip.note, .mg-chip.note { background: var(--note-bg); color: var(--note-ink); }
+.wg-event.jour, .wg-chip.jour, .mg-chip.jour { background: var(--jour-bg); color: var(--jour-ink); }
+.wg-event.cv, .wg-chip.cv, .mg-chip.cv { background: var(--cv-bg); color: var(--cv-ink); }
 .wg-event.cal { border-left: 3px solid var(--cal-accent); }
 .wg-event.wk { border-left: 3px solid var(--wk-accent); }
 .wg-event.rem { border-left: 3px solid var(--rem-accent); }

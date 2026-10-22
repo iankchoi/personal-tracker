@@ -22,6 +22,8 @@ declare module "next-auth/jwt" {
   interface JWT {
     userId?: string;
     needsGoogleReconnect?: boolean;
+    /** Cached copy of `users.google_token_expires_at`, as epoch milliseconds. */
+    googleTokenExpiresAt?: number;
   }
 }
 
@@ -87,10 +89,14 @@ export async function upsertUserFromGoogleProfile(
  * token. Never throws: on any failure (revoked/expired refresh token, network
  * error, non-2xx response) it returns `needsGoogleReconnect: true` so callers
  * can surface a reconnect banner instead of crashing.
+ *
+ * On success, `expiresAt` is the new absolute expiry as epoch seconds (matching
+ * the shape `upsertUserFromGoogleProfile` expects), so callers can persist the
+ * refreshed access token and expiry instead of discarding them.
  */
 export async function refreshGoogleToken(
   user: UserTokenRow,
-): Promise<{ accessToken: string; needsGoogleReconnect: boolean }> {
+): Promise<{ accessToken: string; needsGoogleReconnect: boolean; expiresAt?: number }> {
   try {
     if (!user.googleRefreshToken) {
       throw new Error("No Google refresh token stored for this user");
@@ -113,10 +119,12 @@ export async function refreshGoogleToken(
       throw new Error(`Google token refresh failed with status ${response.status}`);
     }
 
-    const data = (await response.json()) as { access_token: string };
+    const data = (await response.json()) as { access_token: string; expires_in?: number };
+    const expiresAt = Math.floor(Date.now() / 1000) + (data.expires_in ?? 3600);
 
-    return { accessToken: data.access_token, needsGoogleReconnect: false };
-  } catch {
+    return { accessToken: data.access_token, needsGoogleReconnect: false, expiresAt };
+  } catch (error) {
+    console.error("Google access token refresh failed:", error);
     return { accessToken: "", needsGoogleReconnect: true };
   }
 }
@@ -141,32 +149,58 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async jwt({ token, account, profile }) {
       // First sign-in: Google returns `account` (tokens) and `profile` (user info).
       if (account && profile?.email) {
+        if (!account.access_token) {
+          console.error(
+            `Google sign-in for ${profile.email} returned no access_token; account object: ${JSON.stringify(account)}`,
+          );
+        }
+
+        const expiresAt = account.expires_at ?? Math.floor(Date.now() / 1000);
         const dbUser = await upsertUserFromGoogleProfile(
           { email: profile.email, name: profile.name },
           {
             access_token: account.access_token ?? "",
             refresh_token: account.refresh_token,
-            expires_at: account.expires_at ?? Math.floor(Date.now() / 1000),
+            expires_at: expiresAt,
           },
         );
         token.userId = dbUser.id;
         token.needsGoogleReconnect = false;
+        token.googleTokenExpiresAt = expiresAt * 1000;
         return token;
       }
 
-      // Subsequent requests: if the stored access token has expired, try to refresh it.
-      if (token.userId) {
+      // Subsequent requests: only hit the DB/refresh endpoint once our cached
+      // expiry has actually passed, instead of on every single request.
+      if (token.userId && token.googleTokenExpiresAt && token.googleTokenExpiresAt <= Date.now()) {
         const [dbUser] = await db
           .select()
           .from(users)
           .where(eq(users.id, token.userId));
 
-        if (dbUser?.googleTokenExpiresAt && dbUser.googleTokenExpiresAt.getTime() <= Date.now()) {
+        if (dbUser) {
           const refreshed = await refreshGoogleToken({
             id: dbUser.id,
             googleRefreshToken: dbUser.googleRefreshToken,
           });
-          token.needsGoogleReconnect = refreshed.needsGoogleReconnect;
+
+          if (refreshed.accessToken && refreshed.expiresAt) {
+            // Persist the refreshed access token + expiry so the next refresh
+            // check (here or in a future session) sees a fresh expiry instead
+            // of re-refreshing on every subsequent request.
+            await db
+              .update(users)
+              .set({
+                googleAccessToken: encrypt(refreshed.accessToken),
+                googleTokenExpiresAt: new Date(refreshed.expiresAt * 1000),
+              })
+              .where(eq(users.id, dbUser.id));
+
+            token.googleTokenExpiresAt = refreshed.expiresAt * 1000;
+            token.needsGoogleReconnect = false;
+          } else {
+            token.needsGoogleReconnect = refreshed.needsGoogleReconnect;
+          }
         }
       }
 

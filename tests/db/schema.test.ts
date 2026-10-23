@@ -2,10 +2,10 @@ import { eq, or } from "drizzle-orm";
 import { afterAll, expect, test } from "vitest";
 
 import { db } from "../../db";
-import { reminderLists, reminders, users } from "../../db/schema";
+import { reminderLists, reminders, taskMetadata, users } from "../../db/schema";
 
 afterAll(async () => {
-  await db.delete(users).where(or(eq(users.email, "a@test.com"), eq(users.email, "b@test.com")));
+  await db.delete(users).where(or(eq(users.email, "a@test.com"), eq(users.email, "b@test.com"), eq(users.email, "taskmeta-a@test.com")));
 });
 
 test("deleting a user cascades to their reminder_lists, reminders, and subtasks", async () => {
@@ -23,4 +23,14 @@ test("deleting a user cascades to their reminder_lists, reminders, and subtasks"
   expect(remaining).toHaveLength(0); // cascaded
   const bStillExists = await db.select().from(users).where(eq(users.id, userB.id));
   expect(bStillExists).toHaveLength(1); // userB untouched
+});
+
+test("deleting a user cascades to their task_metadata rows", async () => {
+  const [userA] = await db.insert(users).values({ email: "taskmeta-a@test.com" }).returning();
+  await db.insert(taskMetadata).values({ userId: userA.id, googleTaskId: "t1", googleTaskListId: "l1" });
+
+  await db.delete(users).where(eq(users.id, userA.id));
+
+  const remaining = await db.select().from(taskMetadata);
+  expect(remaining).toHaveLength(0);
 });

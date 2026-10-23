@@ -1,0 +1,80 @@
+import { and, eq } from "drizzle-orm";
+
+import { db } from "../db";
+import { taskMetadata } from "../db/schema";
+import type { CalendarColorToken } from "./calendar-colors";
+
+export type TaskMetadataRow = {
+  id: string;
+  userId: string;
+  googleTaskId: string;
+  googleTaskListId: string;
+  dueAt: Date | null;
+  colorToken: CalendarColorToken | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export async function getTaskMetadata(
+  userId: string,
+  googleTaskId: string,
+  googleTaskListId: string
+): Promise<TaskMetadataRow | null> {
+  const rows = await db
+    .select()
+    .from(taskMetadata)
+    .where(
+      and(
+        eq(taskMetadata.userId, userId as any),
+        eq(taskMetadata.googleTaskId, googleTaskId),
+        eq(taskMetadata.googleTaskListId, googleTaskListId)
+      )
+    );
+
+  return rows[0] || null;
+}
+
+export async function upsertTaskMetadata(input: {
+  userId: string;
+  googleTaskId: string;
+  googleTaskListId: string;
+  dueAt: Date | null;
+  colorToken: CalendarColorToken | null;
+}): Promise<TaskMetadataRow> {
+  const [row] = await db
+    .insert(taskMetadata)
+    .values({
+      userId: input.userId as any,
+      googleTaskId: input.googleTaskId,
+      googleTaskListId: input.googleTaskListId,
+      dueAt: input.dueAt,
+      colorToken: input.colorToken,
+    })
+    .onConflictDoUpdate({
+      target: [taskMetadata.userId, taskMetadata.googleTaskId, taskMetadata.googleTaskListId],
+      set: {
+        dueAt: input.dueAt,
+        colorToken: input.colorToken,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+
+  return row;
+}
+
+export async function deleteTaskMetadata(
+  userId: string,
+  googleTaskId: string,
+  googleTaskListId: string
+): Promise<void> {
+  await db
+    .delete(taskMetadata)
+    .where(
+      and(
+        eq(taskMetadata.userId, userId as any),
+        eq(taskMetadata.googleTaskId, googleTaskId),
+        eq(taskMetadata.googleTaskListId, googleTaskListId)
+      )
+    );
+}

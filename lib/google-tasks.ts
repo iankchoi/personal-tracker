@@ -52,8 +52,8 @@ export async function listTasks(accessToken: string, taskListId: string): Promis
     throw new Error(`Google tasks request failed with status ${response.status}`);
   }
 
-  const data = (await response.json()) as { items: Omit<GoogleTask, "taskListId">[] };
-  return data.items.map((item) => ({ ...item, taskListId }));
+  const data = (await response.json()) as { items?: Omit<GoogleTask, "taskListId">[] };
+  return (data.items ?? []).map((item) => ({ ...item, taskListId }));
 }
 
 /**

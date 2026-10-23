@@ -37,6 +37,17 @@ test("listTasks stamps taskListId onto every returned task and requests complete
   expect(fetch).toHaveBeenCalledWith(expect.stringContaining("showCompleted=true"), expect.anything());
 });
 
+test("listTasks resolves to an empty array when Google omits the items key for a task list with zero tasks", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({}),
+  }));
+
+  const result = await listTasks("tok", "l1");
+
+  expect(result).toEqual([]);
+});
+
 test("createTask POSTs to the task list's tasks endpoint", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
     ok: true,

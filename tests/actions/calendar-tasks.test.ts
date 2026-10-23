@@ -142,6 +142,25 @@ test("updateTaskAction updates the Google task and upserts task_metadata", async
   });
 });
 
+test("updateTaskAction with dueDate: null explicitly clears the Google task's due date", async () => {
+  mockUpdateTask.mockResolvedValue({ id: "task1", taskListId: "list1", title: "Buy groceries", status: "needsAction" });
+
+  await updateTaskAction({
+    ...baseInput({ dueDate: null, dueTime: null }),
+    taskId: "task1",
+  });
+
+  expect(mockUpdateTask).toHaveBeenCalledWith(
+    "test-token",
+    "list1",
+    "task1",
+    expect.objectContaining({ due: null }),
+  );
+  const payload = mockUpdateTask.mock.calls[0][3];
+  expect(payload.due).toBeNull();
+  expect("due" in payload).toBe(true);
+});
+
 test("deleteTaskAction deletes the Google task and the task_metadata row", async () => {
   await deleteTaskAction({ taskListId: "list1", taskId: "task1" });
 

@@ -74,7 +74,7 @@ export async function updateTaskAction(input: TaskActionInput & { taskId: string
   const updated = await updateTask(accessToken, input.taskListId, input.taskId, {
     title: input.title,
     notes: input.notes,
-    due: input.dueDate ? `${input.dueDate}T00:00:00.000Z` : undefined,
+    due: input.dueDate === null ? null : `${input.dueDate}T00:00:00.000Z`,
   });
 
   await upsertTaskMetadata({

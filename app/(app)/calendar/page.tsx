@@ -14,6 +14,9 @@ import {
   type GoogleCalendarEvent,
   type GoogleCalendarListEntry,
 } from "../../../lib/google-calendar";
+import { listTaskLists, listTasks, type GoogleTaskList } from "../../../lib/google-tasks";
+import { getTaskMetadata, type TaskMetadataRow } from "../../../lib/task-metadata";
+import { buildCalendarTaskItems, type CalendarTaskItem } from "../../../lib/calendar-tasks-for-grid";
 import { assignCalendarColors, type CalendarColorToken } from "../../../lib/calendar-colors";
 import { addDays, eventStart, eventStartDay } from "../../../lib/calendar-dates";
 import { getViewRange, type ViewType } from "../../../lib/calendar-ranges";
@@ -156,6 +159,8 @@ export default async function CalendarPage({
   let calendars: GoogleCalendarListEntry[];
   let colorByCalendar: Record<string, CalendarColorToken>;
   let allEvents: GoogleCalendarEvent[];
+  let taskLists: GoogleTaskList[];
+  let allTasks: CalendarTaskItem[];
 
   try {
     calendars = await listCalendars(accessToken);
@@ -167,6 +172,30 @@ export default async function CalendarPage({
       ),
     );
     allEvents = eventLists.flat();
+
+    // Tasks have no date-range window to fetch by (unlike events) — Google's
+    // Tasks API always returns a list's full contents — so every task list is
+    // fetched in full here and left for each view to bucket by day itself,
+    // the same "over-fetch, re-bucket per render" shape `allEvents` already
+    // uses.
+    taskLists = await listTaskLists(accessToken);
+    const rawTaskLists = await Promise.all(taskLists.map((list) => listTasks(accessToken, list.id)));
+
+    const metadataRows = await Promise.all(
+      rawTaskLists
+        .flat()
+        .map((task) => getTaskMetadata(session!.user.id, task.id, task.taskListId)),
+    );
+    const metadataByTaskId = new Map<string, TaskMetadataRow>();
+    metadataRows.forEach((row) => {
+      if (row) {
+        metadataByTaskId.set(row.googleTaskId, row);
+      }
+    });
+
+    allTasks = taskLists.flatMap((list, index) =>
+      buildCalendarTaskItems(rawTaskLists[index], list.id, metadataByTaskId),
+    );
   } catch (error) {
     console.error("Failed to load calendar data:", error);
 
@@ -193,7 +222,15 @@ export default async function CalendarPage({
   return (
     <div className="cal-col">
       <CalendarToolbar view={view} date={date} />
-      {view === "week" && <WeekView referenceDate={date} events={allEvents} colorByCalendar={colorByCalendar} />}
+      {view === "week" && (
+        <WeekView
+          referenceDate={date}
+          events={allEvents}
+          colorByCalendar={colorByCalendar}
+          tasks={allTasks}
+          taskLists={taskLists}
+        />
+      )}
       {view === "day" && (
         <DayView
           referenceDate={date}
@@ -209,10 +246,19 @@ export default async function CalendarPage({
           upcoming={allEvents
             .filter((event) => eventStartDay(event).getTime() >= addDays(date, 1).getTime())
             .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime())}
+          tasks={allTasks}
+          taskLists={taskLists}
         />
       )}
       {view === "month" && (
-        <MonthView referenceDate={date} events={allEvents} colorByCalendar={colorByCalendar} today={new Date()} />
+        <MonthView
+          referenceDate={date}
+          events={allEvents}
+          colorByCalendar={colorByCalendar}
+          today={new Date()}
+          tasks={allTasks}
+          taskLists={taskLists}
+        />
       )}
       {view === "agenda" && (
         <AgendaView
@@ -221,6 +267,8 @@ export default async function CalendarPage({
           calendars={calendars}
           colorByCalendar={colorByCalendar}
           today={new Date()}
+          tasks={allTasks}
+          taskLists={taskLists}
         />
       )}
     </div>

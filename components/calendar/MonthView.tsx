@@ -8,7 +8,9 @@ import {
   isSameLocalMonth,
 } from "@/lib/calendar-dates";
 import { getAllDayEvents } from "@/lib/calendar-layout";
+import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
+import type { GoogleTaskList } from "@/lib/google-tasks";
 
 /** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. */
 const MAX_VISIBLE_CHIPS = 3;
@@ -51,6 +53,9 @@ function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalend
  * defines one `.mg-chip` modifier class per `CalendarColorToken`
  * (`.mg-chip.cal`/`.wk`/`.rem`/`.note`/`.jour`/`.cv`), so the token string
  * returned by `colorByCalendar` is used directly as the chip's class name.
+ *
+ * `tasks`/`taskLists` are threaded through by the page (Task 6) but not yet
+ * rendered here — that's Task 7.
  */
 export function MonthView({
   referenceDate,
@@ -62,6 +67,8 @@ export function MonthView({
   events: GoogleCalendarEvent[];
   colorByCalendar: Record<string, CalendarColorToken>;
   today: Date;
+  tasks?: CalendarTaskItem[];
+  taskLists?: GoogleTaskList[];
 }) {
   const weeks = buildWeeks(referenceDate);
 

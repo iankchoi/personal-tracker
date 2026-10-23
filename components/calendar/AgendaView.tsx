@@ -10,7 +10,9 @@ import {
 } from "@/lib/calendar-dates";
 import { getViewRange } from "@/lib/calendar-ranges";
 import { getAllDayEvents } from "@/lib/calendar-layout";
+import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-calendar";
+import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import { CalendarsLegend } from "./CalendarsLegend";
 import { MiniMonth } from "./MiniMonth";
@@ -84,6 +86,9 @@ function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalend
  * `.note`/`.jour`/`.cv`) are keyed one-to-one with `CalendarColorToken`
  * values, so the token string from `colorByCalendar` is used directly as
  * the row's `.src` class name.
+ *
+ * `tasks`/`taskLists` are threaded through by the page (Task 6) but not yet
+ * rendered here — that's Task 7.
  */
 export function AgendaView({
   referenceDate,
@@ -97,6 +102,8 @@ export function AgendaView({
   calendars: GoogleCalendarListEntry[];
   colorByCalendar: Record<string, CalendarColorToken>;
   today: Date;
+  tasks?: CalendarTaskItem[];
+  taskLists?: GoogleTaskList[];
 }) {
   const { start, end } = getViewRange("agenda", referenceDate);
   const days = Array.from({ length: AGENDA_WINDOW_DAYS }, (_, index) => addDays(start, index));

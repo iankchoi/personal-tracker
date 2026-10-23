@@ -14,6 +14,7 @@ import {
   getAllDayEvents,
   layoutTimedEvents,
 } from "@/lib/calendar-layout";
+import { layoutColumns } from "@/lib/calendar-overlap";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 
@@ -150,10 +151,21 @@ export function HourGrid({
               <div key={hour} className="wg-line" />
             ))}
 
-            {layoutTimedEvents(events, day).map(({ event, top, height }) => {
+            {layoutColumns(layoutTimedEvents(events, day)).map(({ event, top, height, column, columnCount }) => {
               const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+              // Only overlapping events (columnCount > 1) need explicit
+              // left/width — single-column events keep the CSS default
+              // (full-width minus its small gutter via `left`/`right`).
+              const columnStyle =
+                columnCount > 1
+                  ? { left: `${(column / columnCount) * 100}%`, width: `${100 / columnCount}%`, right: "auto" }
+                  : {};
               return (
-                <div key={event.id} className={`wg-event ${colorToken}`} style={{ top, height }}>
+                <div
+                  key={event.id}
+                  className={`wg-event ${colorToken}`}
+                  style={{ top, height, ...columnStyle }}
+                >
                   <span className="et">{event.summary}</span>
                   {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
                   <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>

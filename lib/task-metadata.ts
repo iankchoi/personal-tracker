@@ -25,7 +25,7 @@ export async function getTaskMetadata(
     .from(taskMetadata)
     .where(
       and(
-        eq(taskMetadata.userId, userId as any),
+        eq(taskMetadata.userId, userId),
         eq(taskMetadata.googleTaskId, googleTaskId),
         eq(taskMetadata.googleTaskListId, googleTaskListId)
       )
@@ -44,7 +44,7 @@ export async function upsertTaskMetadata(input: {
   const [row] = await db
     .insert(taskMetadata)
     .values({
-      userId: input.userId as any,
+      userId: input.userId,
       googleTaskId: input.googleTaskId,
       googleTaskListId: input.googleTaskListId,
       dueAt: input.dueAt,
@@ -72,7 +72,7 @@ export async function deleteTaskMetadata(
     .delete(taskMetadata)
     .where(
       and(
-        eq(taskMetadata.userId, userId as any),
+        eq(taskMetadata.userId, userId),
         eq(taskMetadata.googleTaskId, googleTaskId),
         eq(taskMetadata.googleTaskListId, googleTaskListId)
       )

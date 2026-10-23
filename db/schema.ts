@@ -14,6 +14,8 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import type { CalendarColorToken } from "../lib/calendar-colors";
+
 const tsvector = customType<{ data: string }>({
   dataType() {
     return "tsvector";
@@ -173,7 +175,7 @@ export const taskMetadata = pgTable(
     googleTaskId: text("google_task_id").notNull(),
     googleTaskListId: text("google_task_list_id").notNull(),
     dueAt: timestamp("due_at", { withTimezone: true }),
-    colorToken: text("color_token"),
+    colorToken: text("color_token").$type<CalendarColorToken>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

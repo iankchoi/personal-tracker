@@ -84,6 +84,21 @@ export async function listEvents(
 }
 
 /**
+ * The write-side shape of an event: `Partial<GoogleCalendarEvent>`, but with
+ * `colorId`/`conferenceData` additionally allowed to be `null`.
+ *
+ * `undefined` and `null` mean different things to Google on a PATCH:
+ * `JSON.stringify` drops an `undefined` field entirely, which Google reads as
+ * "leave this alone", whereas an explicit `null` is what *clears* the field.
+ * `updateEvent` needs to be able to express the latter (removing an event's
+ * color override or its Meet link), so the payload type has to permit it.
+ */
+export type GoogleCalendarEventWrite = Partial<Omit<GoogleCalendarEvent, "colorId" | "conferenceData">> & {
+  colorId?: string | null;
+  conferenceData?: GoogleCalendarEvent["conferenceData"] | null;
+};
+
+/**
  * Creates a new event in the specified calendar. If the event includes
  * `conferenceData.createRequest`, appends `conferenceDataVersion=1` to the
  * request URL as required by Google's API. Stamps `calendarId` onto the
@@ -92,7 +107,7 @@ export async function listEvents(
 export async function createEvent(
   accessToken: string,
   calendarId: string,
-  event: Partial<GoogleCalendarEvent>,
+  event: GoogleCalendarEventWrite,
 ): Promise<GoogleCalendarEvent> {
   let url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
 
@@ -120,14 +135,24 @@ export async function createEvent(
 /**
  * Updates an existing event in the specified calendar. Stamps `calendarId`
  * onto the returned object. Throws on a non-ok response.
+ *
+ * Appends `conferenceDataVersion=1` whenever the patch mentions
+ * `conferenceData` at all — matching `createEvent`'s conditional append, but
+ * widened to cover an explicit `null` as well, since Google requires that
+ * query param for *any* conferenceData write, clearing a Meet link included.
+ * A patch that omits the field entirely leaves the URL untouched.
  */
 export async function updateEvent(
   accessToken: string,
   calendarId: string,
   eventId: string,
-  patch: Partial<GoogleCalendarEvent>,
+  patch: GoogleCalendarEventWrite,
 ): Promise<GoogleCalendarEvent> {
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+  let url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+
+  if (patch.conferenceData !== undefined) {
+    url += "?conferenceDataVersion=1";
+  }
 
   const response = await fetch(url, {
     method: "PATCH",

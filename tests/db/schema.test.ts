@@ -31,6 +31,10 @@ test("deleting a user cascades to their task_metadata rows", async () => {
 
   await db.delete(users).where(eq(users.id, userA.id));
 
-  const remaining = await db.select().from(taskMetadata);
+  // Scoped to this test's own user: `tests/lib/task-metadata.test.ts` also
+  // writes `task_metadata` rows, and vitest runs test files in parallel
+  // workers against the same database, so an unfiltered count here sees that
+  // file's in-flight rows and fails nondeterministically.
+  const remaining = await db.select().from(taskMetadata).where(eq(taskMetadata.userId, userA.id));
   expect(remaining).toHaveLength(0);
 });

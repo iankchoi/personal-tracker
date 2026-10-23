@@ -2,6 +2,11 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { createEvent, deleteEvent, listCalendars, listEvents, updateEvent } from "../../lib/google-calendar";
 
+/** The stubbed global `fetch`'s recorded calls, as `[url, init]` pairs. */
+function fetchCalls(): [string, { body: string }][] {
+  return (fetch as unknown as { mock: { calls: [string, { body: string }][] } }).mock.calls;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -111,6 +116,45 @@ test("updateEvent PATCHes the specific event", async () => {
     "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1",
     expect.objectContaining({ method: "PATCH" }),
   );
+});
+
+test("updateEvent requests conferenceDataVersion=1 when clearing conferenceData with an explicit null", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ id: "evt1", summary: "No more Meet" }),
+  }));
+
+  // Google requires conferenceDataVersion=1 for any conferenceData write,
+  // including removing an existing Meet link.
+  await updateEvent("tok", "primary", "evt1", { conferenceData: null });
+
+  expect(fetch).toHaveBeenCalledWith(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1?conferenceDataVersion=1",
+    expect.objectContaining({ method: "PATCH" }),
+  );
+  expect(JSON.parse(fetchCalls()[0][1].body).conferenceData).toBeNull();
+});
+
+test("updateEvent requests conferenceDataVersion=1 when setting conferenceData.createRequest", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ id: "evt1" }),
+  }));
+
+  await updateEvent("tok", "primary", "evt1", { conferenceData: { createRequest: { requestId: "req-1" } } });
+
+  expect(fetchCalls()[0][0]).toContain("conferenceDataVersion=1");
+});
+
+test("updateEvent omits conferenceDataVersion when the patch doesn't mention conferenceData", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ id: "evt1", summary: "Renamed" }),
+  }));
+
+  await updateEvent("tok", "primary", "evt1", { summary: "Renamed" });
+
+  expect(fetchCalls()[0][0]).not.toContain("conferenceDataVersion");
 });
 
 test("deleteEvent DELETEs the specific event", async () => {

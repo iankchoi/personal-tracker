@@ -303,6 +303,14 @@ a { color: inherit; text-decoration: none; }
 .task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-time { flex: none; opacity: .75; font-weight: 500; }
 .task-done { text-decoration: line-through; opacity: 0.6; }
+.task-check:disabled { cursor: progress; opacity: .55; }
+.task-error { flex: none; color: var(--negative); font-weight: 600; }
+/* A timed task's positioned wrapper is a `.wg-event`, but its inner
+   `.task-chip` already paints the whole block and fills 100% height — so
+   `.wg-event`'s own padding would inset the color block and clip it against
+   `overflow: hidden`. Zero it out (including under `.day-grid`'s larger
+   padding override) and let the chip fill the slot. */
+.wg-event.wg-task, .day-grid .wg-event.wg-task { padding: 0; }
 .wg-task .task-chip { height: 100%; }
 .wg-allday .task-chip { margin-top: 2px; }
 .mg-events .task-chip { font-size: 11px; }

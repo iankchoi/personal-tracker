@@ -15,7 +15,7 @@ import {
   type GoogleCalendarListEntry,
 } from "../../../lib/google-calendar";
 import { listTaskLists, listTasks, type GoogleTaskList } from "../../../lib/google-tasks";
-import { getTaskMetadata, type TaskMetadataRow } from "../../../lib/task-metadata";
+import { getTaskMetadataForTasks, type TaskMetadataRow } from "../../../lib/task-metadata";
 import { buildCalendarTaskItems, type CalendarTaskItem } from "../../../lib/calendar-tasks-for-grid";
 import { assignCalendarColors, type CalendarColorToken } from "../../../lib/calendar-colors";
 import { addDays, eventStart, eventStartDay } from "../../../lib/calendar-dates";
@@ -173,25 +173,25 @@ export default async function CalendarPage({
     );
     allEvents = eventLists.flat();
 
-    // Tasks have no date-range window to fetch by (unlike events) — Google's
-    // Tasks API always returns a list's full contents — so every task list is
-    // fetched in full here and left for each view to bucket by day itself,
-    // the same "over-fetch, re-bucket per render" shape `allEvents` already
-    // uses.
+    // Tasks have no date-range window to fetch by (unlike events), so every
+    // task list is fetched in full here and left for each view to bucket by
+    // day itself — the same "over-fetch, re-bucket per render" shape
+    // `allEvents` already uses. "In full" means every page: Google's Tasks
+    // API returns at most 100 items per response and signals the rest with a
+    // `nextPageToken`, which `listTaskLists`/`listTasks` follow internally
+    // until the list is exhausted.
     taskLists = await listTaskLists(accessToken);
     const rawTaskLists = await Promise.all(taskLists.map((list) => listTasks(accessToken, list.id)));
+    const rawTasks = rawTaskLists.flat();
 
-    const metadataRows = await Promise.all(
-      rawTaskLists
-        .flat()
-        .map((task) => getTaskMetadata(session!.user.id, task.id, task.taskListId)),
+    // One query for every fetched task's metadata, rather than one per task.
+    const metadataRows = await getTaskMetadataForTasks(
+      session!.user.id,
+      rawTasks.map((task) => task.id),
     );
-    const metadataByTaskId = new Map<string, TaskMetadataRow>();
-    metadataRows.forEach((row) => {
-      if (row) {
-        metadataByTaskId.set(row.googleTaskId, row);
-      }
-    });
+    const metadataByTaskId = new Map<string, TaskMetadataRow>(
+      metadataRows.map((row) => [row.googleTaskId, row]),
+    );
 
     allTasks = taskLists.flatMap((list, index) =>
       buildCalendarTaskItems(rawTaskLists[index], list.id, metadataByTaskId),

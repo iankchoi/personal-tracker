@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { db } from "../db";
 import { taskMetadata } from "../db/schema";
@@ -32,6 +32,33 @@ export async function getTaskMetadata(
     );
 
   return rows[0] || null;
+}
+
+/**
+ * Fetches every metadata row this user has for the given Google task ids, in
+ * one query.
+ *
+ * The Calendar page needs the metadata for a whole page's worth of tasks at
+ * once; calling `getTaskMetadata` per task would be one database round trip
+ * per task (a classic N+1). An empty `taskIds` short-circuits without
+ * touching the database — `inArray` with an empty list is both pointless and
+ * awkward SQL.
+ *
+ * Scoped by `userId`, so a task id that happens to collide across users can
+ * never leak another user's row.
+ */
+export async function getTaskMetadataForTasks(
+  userId: string,
+  taskIds: string[]
+): Promise<TaskMetadataRow[]> {
+  if (taskIds.length === 0) {
+    return [];
+  }
+
+  return db
+    .select()
+    .from(taskMetadata)
+    .where(and(eq(taskMetadata.userId, userId), inArray(taskMetadata.googleTaskId, taskIds)));
 }
 
 export async function upsertTaskMetadata(input: {

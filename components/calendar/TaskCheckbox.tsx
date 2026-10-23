@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { completeTaskAction } from "../../lib/actions/calendar-tasks";
 import type { CalendarColorToken } from "../../lib/calendar-colors";
@@ -42,23 +43,59 @@ function formatTaskTime(dueTime: string): string {
  * avoids hand-rolling optimistic UI that would otherwise need to be
  * reconciled against the server's eventual response.
  *
+ * Because the checkbox is controlled purely by `task.completed`, a failed
+ * toggle would otherwise snap it silently back to its old state with no
+ * explanation — so a rejected action is caught and surfaced as a short inline
+ * message (the compact analog of the Calendar page's own `.error-block`;
+ * there's no room for a dot-plus-retry row inside a grid chip). The checkbox
+ * is also disabled while the action is in flight, so a double-click can't
+ * fire two overlapping toggles that race each other.
+ *
  * In Part 2 this component also becomes clickable to open the task editor;
  * that interaction is out of this task's scope.
  */
 export function TaskCheckbox({ task }: { task: CalendarTaskItem }) {
   const router = useRouter();
+  const [isPending, setIsPending] = useState(false);
+  const [failed, setFailed] = useState(false);
   const colorToken = task.colorToken ?? FALLBACK_COLOR_TOKEN;
 
   async function handleChange() {
-    await completeTaskAction({ taskListId: task.taskListId, taskId: task.id, completed: !task.completed });
-    router.refresh();
+    if (isPending) {
+      return;
+    }
+
+    setIsPending(true);
+    setFailed(false);
+
+    try {
+      await completeTaskAction({ taskListId: task.taskListId, taskId: task.id, completed: !task.completed });
+      router.refresh();
+    } catch (error) {
+      console.error("Failed to update task completion:", error);
+      setFailed(true);
+    } finally {
+      setIsPending(false);
+    }
   }
 
   return (
     <label className={`task-chip ${colorToken}`}>
-      <input className="task-check" type="checkbox" checked={task.completed} onChange={handleChange} />
+      <input
+        className="task-check"
+        type="checkbox"
+        checked={task.completed}
+        disabled={isPending}
+        onChange={handleChange}
+      />
       <span className={task.completed ? "task-title task-done" : "task-title"}>{task.title}</span>
-      {task.dueTime && <span className="task-time">{formatTaskTime(task.dueTime)}</span>}
+      {failed ? (
+        <span className="task-error" role="alert">
+          Couldn&apos;t update
+        </span>
+      ) : (
+        task.dueTime && <span className="task-time">{formatTaskTime(task.dueTime)}</span>
+      )}
     </label>
   );
 }

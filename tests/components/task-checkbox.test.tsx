@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const { mockCompleteTaskAction, mockRefresh } = vi.hoisted(() => ({
   mockCompleteTaskAction: vi.fn(),
@@ -22,6 +22,10 @@ const baseTask: CalendarTaskItem = {
   dueTime: null,
   colorToken: null,
 };
+
+beforeEach(() => {
+  mockCompleteTaskAction.mockReset().mockResolvedValue(undefined);
+});
 
 afterEach(() => {
   cleanup();
@@ -77,4 +81,53 @@ test("renders a formatted due time when the task has one", () => {
 test("renders no due-time text when the task has none", () => {
   render(<TaskCheckbox task={{ ...baseTask, dueTime: null }} />);
   expect(screen.queryByText(/\d+:\d{2} (AM|PM)/)).not.toBeInTheDocument();
+});
+
+test("a rejected completeTaskAction shows an inline error and leaves the checkbox at its original state", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  mockCompleteTaskAction.mockRejectedValue(new Error("Google said no"));
+
+  render(<TaskCheckbox task={{ ...baseTask, completed: false }} />);
+  fireEvent.click(screen.getByRole("checkbox"));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't update/i);
+  // Controlled by `task.completed`, so a failed toggle reverts to unchecked.
+  expect(screen.getByRole("checkbox")).not.toBeChecked();
+  expect(mockRefresh).not.toHaveBeenCalled();
+
+  consoleError.mockRestore();
+});
+
+test("the checkbox is re-enabled after a failed toggle so the user can retry", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  mockCompleteTaskAction.mockRejectedValue(new Error("Google said no"));
+
+  render(<TaskCheckbox task={{ ...baseTask, completed: false }} />);
+  fireEvent.click(screen.getByRole("checkbox"));
+
+  await screen.findByRole("alert");
+  await waitFor(() => expect(screen.getByRole("checkbox")).not.toBeDisabled());
+
+  consoleError.mockRestore();
+});
+
+test("the checkbox is disabled while the toggle is in flight, so a double-click can't fire two overlapping actions", async () => {
+  let resolveAction: (() => void) | undefined;
+  mockCompleteTaskAction.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveAction = resolve;
+      }),
+  );
+
+  render(<TaskCheckbox task={{ ...baseTask, completed: false }} />);
+  const checkbox = screen.getByRole("checkbox");
+  fireEvent.click(checkbox);
+
+  await waitFor(() => expect(checkbox).toBeDisabled());
+  fireEvent.click(checkbox);
+  expect(mockCompleteTaskAction).toHaveBeenCalledTimes(1);
+
+  resolveAction?.();
+  await waitFor(() => expect(checkbox).not.toBeDisabled());
 });

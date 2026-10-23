@@ -14,46 +14,96 @@ export type GoogleTask = {
 };
 
 /**
- * Fetches the current user's list of task lists from Google's Tasks API.
+ * Page size requested from every paginated Tasks API list call.
+ *
+ * Google's Tasks API defaults to `maxResults=20` and caps it at 100, and
+ * returns a `nextPageToken` whenever more items exist. Asking for the maximum
+ * keeps the number of round trips down; the `nextPageToken` loops below are
+ * what actually guarantee completeness. This matters most for `listTasks`,
+ * which deliberately asks for completed and hidden tasks too — a long-lived
+ * list's completed archive can easily fill several pages on its own, and
+ * without following the token the still-upcoming tasks a user actually wants
+ * on the grid could never be reached.
+ */
+const TASKS_MAX_RESULTS = "100";
+
+/**
+ * Fetches the current user's list of task lists from Google's Tasks API,
+ * following `nextPageToken` until every page has been read.
  * Thin REST wrapper: no caching, no filtering — just the HTTP call shape.
- * Throws on a non-ok response.
+ *
+ * Google omits the `items` key entirely (rather than sending `items: []`) for
+ * a user with zero task lists, so each page's items default to `[]` — a user
+ * with no task lists resolves to an empty array instead of throwing and
+ * taking down the whole Calendar page's render. Throws on a non-ok response.
  */
 export async function listTaskLists(accessToken: string): Promise<GoogleTaskList[]> {
-  const response = await fetch("https://tasks.googleapis.com/tasks/v1/users/@me/lists", {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const all: GoogleTaskList[] = [];
+  let pageToken: string | undefined;
 
-  if (!response.ok) {
-    throw new Error(`Google taskLists request failed with status ${response.status}`);
-  }
+  do {
+    const params = new URLSearchParams({ maxResults: TASKS_MAX_RESULTS });
+    if (pageToken) {
+      params.set("pageToken", pageToken);
+    }
 
-  const data = (await response.json()) as { items: GoogleTaskList[] };
-  return data.items;
+    const response = await fetch(
+      `https://tasks.googleapis.com/tasks/v1/users/@me/lists?${params.toString()}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+
+    if (!response.ok) {
+      throw new Error(`Google taskLists request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as { items?: GoogleTaskList[]; nextPageToken?: string };
+    all.push(...(data.items ?? []));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return all;
 }
 
 /**
- * Fetches tasks for a single task list. `showCompleted=true` includes completed
- * tasks so they remain visible (e.g., struck-through), and `showHidden=true`
- * includes hidden tasks. Google's response omits `taskListId` on each item, so
- * it is stamped on here before returning. Throws on a non-ok response.
+ * Fetches tasks for a single task list, following `nextPageToken` until every
+ * page has been read. `showCompleted=true` includes completed tasks so they
+ * remain visible (e.g., struck-through), and `showHidden=true` includes
+ * hidden tasks. Google's response omits `taskListId` on each item, so it is
+ * stamped on here before returning. A page with no `items` key contributes
+ * nothing rather than throwing. Throws on a non-ok response.
  */
 export async function listTasks(accessToken: string, taskListId: string): Promise<GoogleTask[]> {
-  const params = new URLSearchParams({
-    showCompleted: "true",
-    showHidden: "true",
-  });
+  const all: GoogleTask[] = [];
+  let pageToken: string | undefined;
 
-  const response = await fetch(
-    `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(taskListId)}/tasks?${params.toString()}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  );
+  do {
+    const params = new URLSearchParams({
+      showCompleted: "true",
+      showHidden: "true",
+      maxResults: TASKS_MAX_RESULTS,
+    });
+    if (pageToken) {
+      params.set("pageToken", pageToken);
+    }
 
-  if (!response.ok) {
-    throw new Error(`Google tasks request failed with status ${response.status}`);
-  }
+    const response = await fetch(
+      `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(taskListId)}/tasks?${params.toString()}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
 
-  const data = (await response.json()) as { items?: Omit<GoogleTask, "taskListId">[] };
-  return (data.items ?? []).map((item) => ({ ...item, taskListId }));
+    if (!response.ok) {
+      throw new Error(`Google tasks request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      items?: Omit<GoogleTask, "taskListId">[];
+      nextPageToken?: string;
+    };
+    all.push(...(data.items ?? []).map((item) => ({ ...item, taskListId })));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return all;
 }
 
 /**

@@ -14,7 +14,7 @@ import {
   getAllDayEvents,
   layoutTimedEvents,
 } from "@/lib/calendar-layout";
-import { layoutColumns } from "@/lib/calendar-overlap";
+import { layoutColumns, type ColumnedGridItem, type PositionedGridItem } from "@/lib/calendar-overlap";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 
@@ -33,19 +33,25 @@ function formatHourLabel(hour: number): string {
   return `${displayHour} ${period}`;
 }
 
-type PositionedTask = { task: CalendarTaskItem; top: number; height: number };
+/** Horizontal gutter (px) between two side-by-side columns, so overlapping blocks never render edge-to-edge. */
+const COLUMN_GUTTER_PX = 4;
 
 /**
- * Tasks due on `day` with a `dueTime`, positioned into the same timed-block
- * shape `layoutTimedEvents` produces. Since tasks have no duration, each
- * gets a fixed 30-minute-tall block (`HOUR_ROW_HEIGHT * 0.5`) rather than a
- * computed height. A task whose `dueTime` falls outside the grid's fixed
- * [GRID_START_HOUR, GRID_END_HOUR) window is excluded, matching
- * `layoutTimedEvents`'s own out-of-window exclusion for events.
+ * Tasks due on `day` with a `dueTime`, positioned into the same tagged
+ * timed-block shape events use, so both can be fed through `layoutColumns`
+ * as one combined list. Since tasks have no duration, each gets a fixed
+ * 30-minute-tall block (`HOUR_ROW_HEIGHT * 0.5`) rather than a computed
+ * height.
+ *
+ * A task whose `dueTime` falls outside the grid's fixed [GRID_START_HOUR,
+ * GRID_END_HOUR) window is excluded (not clamped) per the v1 fixed-window
+ * limitation, matching `layoutTimedEvents`'s own out-of-window exclusion for
+ * events — so such a task doesn't render in Day/Week view at all (unlike a
+ * task with no `dueTime` set, which still shows in the all-day row).
  */
-function layoutTimedTasks(tasks: CalendarTaskItem[], day: Date): PositionedTask[] {
+function layoutTimedTasks(tasks: CalendarTaskItem[], day: Date): PositionedGridItem[] {
   const dayParam = formatDateParam(day);
-  const positioned: PositionedTask[] = [];
+  const positioned: PositionedGridItem[] = [];
 
   for (const task of tasks) {
     if (task.dueDate !== dayParam || !task.dueTime) {
@@ -58,10 +64,54 @@ function layoutTimedTasks(tasks: CalendarTaskItem[], day: Date): PositionedTask[
       continue;
     }
 
-    positioned.push({ task, top: (hour - GRID_START_HOUR) * HOUR_ROW_HEIGHT, height: HOUR_ROW_HEIGHT * 0.5 });
+    positioned.push({
+      kind: "task",
+      item: task,
+      top: (hour - GRID_START_HOUR) * HOUR_ROW_HEIGHT,
+      height: HOUR_ROW_HEIGHT * 0.5,
+    });
   }
 
   return positioned;
+}
+
+/**
+ * Every timed block on `day` — events and tasks alike — laid out through one
+ * `layoutColumns` pass so a task and an event sharing a time slot end up in
+ * side-by-side columns instead of the task painting opaquely over the event
+ * (which is what a separate, later-in-DOM-order task pass used to do).
+ */
+function layoutTimedBlocks(
+  events: GoogleCalendarEvent[],
+  tasks: CalendarTaskItem[],
+  day: Date,
+): ColumnedGridItem[] {
+  const timedEvents: PositionedGridItem[] = layoutTimedEvents(events, day).map(({ event, top, height }) => ({
+    kind: "event",
+    item: event,
+    top,
+    height,
+  }));
+
+  return layoutColumns([...timedEvents, ...layoutTimedTasks(tasks, day)]);
+}
+
+/**
+ * Inline `left`/`width` for a block's column assignment. Only overlapping
+ * blocks (`columnCount > 1`) need it — a lone block keeps the CSS default
+ * (full-width minus `.wg-event`'s small `left`/`right` inset). Each column's
+ * width loses `COLUMN_GUTTER_PX` so adjacent columns keep a visible seam.
+ */
+function columnStyleFor(column: number, columnCount: number) {
+  if (columnCount <= 1) {
+    return {};
+  }
+
+  return {
+    left: `${(column / columnCount) * 100}%`,
+    width: `calc(${100 / columnCount}% - ${COLUMN_GUTTER_PX}px)`,
+    right: "auto" as const,
+  };
 }
 
 /** Tasks due on `day` with no `dueTime` — these render in the `.wg-allday` row alongside all-day event chips. */
@@ -151,33 +201,31 @@ export function HourGrid({
               <div key={hour} className="wg-line" />
             ))}
 
-            {layoutColumns(layoutTimedEvents(events, day)).map(({ event, top, height, column, columnCount }) => {
+            {/* Events and timed tasks come out of one combined layout pass,
+                so each gets a real column instead of tasks stacking on top of
+                whatever event shares their slot. `kind` routes each to its
+                own markup. */}
+            {layoutTimedBlocks(events, tasks, day).map((block) => {
+              const blockStyle = { top: block.top, height: block.height, ...columnStyleFor(block.column, block.columnCount) };
+
+              if (block.kind === "task") {
+                return (
+                  <div key={`task-${block.item.id}`} className="wg-event wg-task" style={blockStyle}>
+                    <TaskCheckbox task={block.item} />
+                  </div>
+                );
+              }
+
+              const event = block.item;
               const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
-              // Only overlapping events (columnCount > 1) need explicit
-              // left/width — single-column events keep the CSS default
-              // (full-width minus its small gutter via `left`/`right`).
-              const columnStyle =
-                columnCount > 1
-                  ? { left: `${(column / columnCount) * 100}%`, width: `${100 / columnCount}%`, right: "auto" }
-                  : {};
               return (
-                <div
-                  key={event.id}
-                  className={`wg-event ${colorToken}`}
-                  style={{ top, height, ...columnStyle }}
-                >
+                <div key={`event-${event.id}`} className={`wg-event ${colorToken}`} style={blockStyle}>
                   <span className="et">{event.summary}</span>
                   {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
                   <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>
                 </div>
               );
             })}
-
-            {layoutTimedTasks(tasks, day).map(({ task, top, height }) => (
-              <div key={`task-${task.id}`} className="wg-event wg-task" style={{ top, height }}>
-                <TaskCheckbox task={task} />
-              </div>
-            ))}
 
             {nowTop !== null && <div className="wg-now" style={{ top: nowTop }} />}
           </div>

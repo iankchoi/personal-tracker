@@ -3,7 +3,7 @@
 import { auth } from "../../auth";
 import type { CalendarColorToken } from "../calendar-colors";
 import { colorIdForToken } from "../calendar-event-colors";
-import { createEvent, deleteEvent, updateEvent, type GoogleCalendarEvent } from "../google-calendar";
+import { createEvent, deleteEvent, updateEvent, type GoogleCalendarEventWrite } from "../google-calendar";
 import { getGoogleAccessToken } from "../google-token";
 
 export type RecurrenceEditScope = "this" | "all" | "following";
@@ -40,9 +40,33 @@ export type EventActionInput = {
  *   dedupe retries of the same conference request).
  * - `recurrence` passes straight through untouched (this task's actions are
  *   deliberately recurrence-unaware; a later plan adds scope-aware editing).
+ *
+ * `forUpdate` switches on the one place create and update genuinely differ:
+ * **clearing**. On a create, an absent optional field just means "this event
+ * doesn't have one", and leaving it `undefined` (so `JSON.stringify` drops it)
+ * is exactly right. On an update, `JSON.stringify` dropping the field makes
+ * Google keep whatever was there before — so a caller explicitly passing
+ * `colorToken: null` / `notifyMinutesBefore: null` / `addGoogleMeet: false`
+ * would silently fail to remove anything. Under `forUpdate`, those three
+ * explicit "none" values are therefore translated into values Google reads as
+ * a removal:
+ * - `colorToken === null` -> `colorId: null` (drop the per-event color
+ *   override, falling back to the calendar's own color).
+ * - `notifyMinutesBefore === null` -> `reminders: { useDefault: true }`.
+ *   `EventActionInput` documents `null` as "no reminder", and reverting to the
+ *   calendar's default reminder is the closest thing Google's API offers —
+ *   there is no distinct "no reminder at all" state to patch to here.
+ * - `addGoogleMeet === false` -> `conferenceData: null` (remove the Meet
+ *   link). `updateEvent` appends `conferenceDataVersion=1` for this.
+ *
+ * An *absent* (`undefined`) field still means "don't mention it" on an update,
+ * so a partial edit never clobbers fields the caller didn't supply.
  */
-function buildEventPayload(input: EventActionInput): Partial<GoogleCalendarEvent> {
-  return {
+function buildEventPayload(
+  input: EventActionInput,
+  { forUpdate = false }: { forUpdate?: boolean } = {},
+): GoogleCalendarEventWrite {
+  const payload: GoogleCalendarEventWrite = {
     summary: input.title,
     start: input.allDay ? { date: input.start } : { dateTime: input.start },
     end: input.allDay ? { date: input.end } : { dateTime: input.end },
@@ -60,6 +84,22 @@ function buildEventPayload(input: EventActionInput): Partial<GoogleCalendarEvent
     guestsCanSeeOtherGuests: input.guestsCanSeeOtherGuests,
     recurrence: input.recurrence,
   };
+
+  if (!forUpdate) {
+    return payload;
+  }
+
+  if (input.colorToken === null) {
+    payload.colorId = null;
+  }
+  if (input.notifyMinutesBefore === null) {
+    payload.reminders = { useDefault: true };
+  }
+  if (input.addGoogleMeet === false) {
+    payload.conferenceData = null;
+  }
+
+  return payload;
 }
 
 /**
@@ -97,13 +137,24 @@ export async function createEventAction(input: EventActionInput): Promise<{ id: 
  * patch a single instance, the whole series, or this-and-following), but
  * this task's non-recurring-aware implementation ignores it and always acts
  * directly on the given `eventId`.
+ *
+ * Unlike `createEventAction`, this builds its payload with `forUpdate: true`
+ * so an explicit `colorToken: null` / `notifyMinutesBefore: null` /
+ * `addGoogleMeet: false` actually *removes* the color, reminder, or Meet link
+ * instead of being dropped from the PATCH body and silently preserved — see
+ * `buildEventPayload`.
  */
 export async function updateEventAction(
   input: EventActionInput & { eventId: string; scope?: RecurrenceEditScope },
 ): Promise<{ id: string }> {
   const accessToken = await requireGoogleAccessToken();
 
-  const updated = await updateEvent(accessToken, input.calendarId, input.eventId, buildEventPayload(input));
+  const updated = await updateEvent(
+    accessToken,
+    input.calendarId,
+    input.eventId,
+    buildEventPayload(input, { forUpdate: true }),
+  );
 
   return { id: updated.id };
 }

@@ -181,6 +181,54 @@ test("updateEventAction calls updateEvent with the given eventId regardless of s
   );
 });
 
+test("updateEventAction sends colorId: null when colorToken is explicitly null, so the override is cleared", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
+
+  await updateEventAction({ ...baseInput({ colorToken: null }), eventId: "evt1" });
+
+  expect(mockUpdateEvent.mock.calls[0][3].colorId).toBeNull();
+});
+
+test("updateEventAction omits colorId when colorToken is absent, leaving the existing color untouched", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
+
+  await updateEventAction({ ...baseInput(), eventId: "evt1" });
+
+  expect(mockUpdateEvent.mock.calls[0][3].colorId).toBeUndefined();
+});
+
+test("updateEventAction sends reminders: { useDefault: true } when notifyMinutesBefore is explicitly null", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
+
+  await updateEventAction({ ...baseInput({ notifyMinutesBefore: null }), eventId: "evt1" });
+
+  expect(mockUpdateEvent.mock.calls[0][3].reminders).toEqual({ useDefault: true });
+});
+
+test("updateEventAction omits reminders when notifyMinutesBefore is absent", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
+
+  await updateEventAction({ ...baseInput(), eventId: "evt1" });
+
+  expect(mockUpdateEvent.mock.calls[0][3].reminders).toBeUndefined();
+});
+
+test("updateEventAction sends conferenceData: null when addGoogleMeet is explicitly false", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
+
+  await updateEventAction({ ...baseInput({ addGoogleMeet: false }), eventId: "evt1" });
+
+  expect(mockUpdateEvent.mock.calls[0][3].conferenceData).toBeNull();
+});
+
+test("updateEventAction omits conferenceData when addGoogleMeet is absent, keeping any existing Meet link", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
+
+  await updateEventAction({ ...baseInput(), eventId: "evt1" });
+
+  expect(mockUpdateEvent.mock.calls[0][3].conferenceData).toBeUndefined();
+});
+
 test("deleteEventAction calls deleteEvent with the given calendarId and eventId", async () => {
   mockDeleteEvent.mockResolvedValue(undefined);
 

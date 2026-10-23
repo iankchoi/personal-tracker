@@ -13,6 +13,7 @@ import {
   type GoogleCalendarListEntry,
 } from "../../../lib/google-calendar";
 import { assignCalendarColors, type CalendarColorToken } from "../../../lib/calendar-colors";
+import { addDays, eventStart, eventStartDay } from "../../../lib/calendar-dates";
 import { getViewRange, type ViewType } from "../../../lib/calendar-ranges";
 
 // This page reads the signed-in session (cookies) directly via `auth()`, so
@@ -21,6 +22,34 @@ import { getViewRange, type ViewType } from "../../../lib/calendar-ranges";
 export const instant = false;
 
 const VALID_VIEWS: ViewType[] = ["day", "week", "month", "agenda"];
+
+/**
+ * Days of slack added to each end of every `listEvents` window.
+ *
+ * `timeMin`/`timeMax` go to Google as UTC instants (`toISOString()`) derived
+ * from local-midnight boundaries, while each view decides an event's day from
+ * the event's *own* UTC offset. Those two frames can differ by up to 14
+ * hours, so an event legitimately belonging to the first or last rendered day
+ * could otherwise fall just outside the requested window and never be
+ * fetched. One day of margin on each side is more than the largest possible
+ * offset spread.
+ *
+ * Over-fetching is safe: every view re-buckets the flat event list per
+ * rendered day itself (`layoutTimedEvents`/`getAllDayEvents`/
+ * `getEventsForDay`), so extra candidates are simply never matched to a cell.
+ */
+const FETCH_PADDING_DAYS = 1;
+
+/**
+ * Month view's padding. `MonthView` renders whole week rows, so its grid also
+ * shows up to 6 leading days of the previous month and up to 6 trailing days
+ * of the next (e.g. a 31-day month starting on a Saturday leads in with 6
+ * outside cells). Those `.mg-cell.outside` days sit outside
+ * `getViewRange("month", ...)`, so without padding they could never show an
+ * event. 7 = the 6-day worst-case grid overflow + the 1-day timezone margin
+ * above, covered in one window.
+ */
+const MONTH_FETCH_PADDING_DAYS = 7;
 
 /** Formats a Date as `YYYY-MM-DD` in local time, matching the `date` search param's shape. */
 function formatDateParam(date: Date): string {
@@ -50,16 +79,6 @@ function parseDate(raw: string | undefined): Date {
   return new Date();
 }
 
-/** Adds (or subtracts, for negative counts) whole days using local-calendar arithmetic. */
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-}
-
-/** The moment an event starts, whether it's timed (`dateTime`) or all-day (`date`). */
-function eventStart(event: GoogleCalendarEvent): Date {
-  return event.start.dateTime ? new Date(event.start.dateTime) : new Date(`${event.start.date}T00:00:00`);
-}
-
 export default async function CalendarPage({
   searchParams,
 }: {
@@ -72,15 +91,35 @@ export default async function CalendarPage({
   // app/(app)/layout.tsx has already redirected unauthenticated requests to
   // /sign-in before this page renders, so `session` is guaranteed non-null.
   const session = await auth();
+
+  const reconnectPage = (
+    <div className="cal-col">
+      <CalendarToolbar view={view} date={date} />
+      <ReconnectBanner />
+    </div>
+  );
+
+  // The session already carries the answer when a refresh has previously
+  // failed (`auth.ts`'s `session` callback copies the JWT's
+  // `needsGoogleReconnect` onto it), so check that *before* reaching for a
+  // token. Without this guard every page load would spend a DB read plus a
+  // doomed POST to Google's token endpoint re-learning what the session just
+  // told us — the same reason `auth.ts`'s `jwt` callback guards its own
+  // refresh with `!token.needsGoogleReconnect`. A revoked refresh token
+  // won't start working on its own; only an explicit reconnect (the banner)
+  // clears the flag.
+  if (session!.user.needsGoogleReconnect) {
+    return reconnectPage;
+  }
+
+  // `getGoogleAccessToken` remains the chokepoint for the other direction:
+  // the session's cached flag says all is well, but the stored token may
+  // have expired since, so this refreshes it (or reports reconnect) from
+  // live DB state.
   const tokenResult = await getGoogleAccessToken(session!.user.id);
 
   if (tokenResult.needsGoogleReconnect) {
-    return (
-      <div className="cal-col">
-        <CalendarToolbar view={view} date={date} />
-        <ReconnectBanner />
-      </div>
-    );
+    return reconnectPage;
   }
 
   const { accessToken } = tokenResult;
@@ -88,11 +127,16 @@ export default async function CalendarPage({
 
   // Day view's "Up next" rail (UpNext, Task 8) needs events from days after
   // the one being viewed, not just the viewed day itself — so for Day view
-  // only, widen the fetch window to the same 14-day span Agenda view already
+  // only, widen the base window to the same 14-day span Agenda view already
   // uses (reusing `getViewRange("agenda", ...)` rather than inventing new
-  // date math here). `fetchRange` always starts at the view's own range
-  // start, so this is a pure superset for every other view.
-  const fetchRange = view === "day" ? getViewRange("agenda", date) : range;
+  // date math here). It always starts at the view's own range start, so this
+  // is a pure superset for every other view.
+  const baseFetchRange = view === "day" ? getViewRange("agenda", date) : range;
+
+  // ...then pad both ends (see FETCH_PADDING_DAYS / MONTH_FETCH_PADDING_DAYS).
+  const paddingDays = view === "month" ? MONTH_FETCH_PADDING_DAYS : FETCH_PADDING_DAYS;
+  const fetchStart = addDays(baseFetchRange.start, -paddingDays);
+  const fetchEnd = addDays(baseFetchRange.end, paddingDays);
 
   // Fetching only — no JSX is constructed inside this try/catch, since a
   // rendering error thrown by a child component wouldn't be caught here
@@ -108,7 +152,7 @@ export default async function CalendarPage({
 
     const eventLists = await Promise.all(
       calendars.map((calendar) =>
-        listEvents(accessToken, calendar.id, fetchRange.start.toISOString(), fetchRange.end.toISOString()),
+        listEvents(accessToken, calendar.id, fetchStart.toISOString(), fetchEnd.toISOString()),
       ),
     );
     allEvents = eventLists.flat();
@@ -145,8 +189,14 @@ export default async function CalendarPage({
           events={allEvents}
           calendars={calendars}
           colorByCalendar={colorByCalendar}
+          // "Up next" means days strictly after the viewed day, decided by
+          // each event's own wall-clock day (`eventStartDay`) rather than by
+          // re-reading its instant in the server's timezone — otherwise a
+          // late-evening event would jump a day under a mismatched `TZ`.
+          // Ordering still uses the absolute instant, which is
+          // timezone-independent.
           upcoming={allEvents
-            .filter((event) => eventStart(event).getTime() >= addDays(date, 1).getTime())
+            .filter((event) => eventStartDay(event).getTime() >= addDays(date, 1).getTime())
             .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime())}
         />
       )}

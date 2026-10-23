@@ -1,4 +1,13 @@
 import type { CalendarColorToken } from "@/lib/calendar-colors";
+import {
+  MONTH_NAMES_FULL,
+  WEEKDAY_NAMES_FULL,
+  addDays,
+  eventStart,
+  eventStartDay,
+  formatTimeLabel,
+  isSameLocalDay,
+} from "@/lib/calendar-dates";
 import { getViewRange } from "@/lib/calendar-ranges";
 import { getAllDayEvents } from "@/lib/calendar-layout";
 import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-calendar";
@@ -6,45 +15,11 @@ import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-
 import { CalendarsLegend } from "./CalendarsLegend";
 import { MiniMonth } from "./MiniMonth";
 
-const WEEKDAY_NAMES_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTH_NAMES_FULL = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
 /** Length of the agenda window, matching `getViewRange("agenda", ...)` in lib/calendar-ranges.ts. */
 const AGENDA_WINDOW_DAYS = 14;
 
 /** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
 const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
-
-function isSameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-/** Adds (or subtracts, for negative counts) whole days using local-calendar arithmetic. */
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-}
-
-/** Formats a Date's wall-clock time for a row's time slot, e.g. "9:00 AM". */
-function formatTimeLabel(date: Date): string {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const period = hours < 12 ? "AM" : "PM";
-  const displayHour = hours % 12 === 0 ? 12 : hours % 12;
-  return `${displayHour}:${minutes.toString().padStart(2, "0")} ${period}`;
-}
 
 /**
  * Agenda's day-group heading, matching the mockup: "Today"/"Tomorrow" for
@@ -76,15 +51,17 @@ function formatGroupSub(day: Date, today: Date): string {
 /**
  * All events (all-day or timed) that fall on `day`, all-day events first and
  * timed events sorted chronologically — mirrors `MonthView`'s
- * `getEventsForDay`, except timed events are explicitly sorted here since
- * `events` may combine multiple calendars whose individual lists are each
- * sorted but whose merge is not guaranteed to be.
+ * `getEventsForDay`. The sort is explicit because `events` may combine
+ * multiple calendars whose individual lists are each sorted but whose merge
+ * is not guaranteed to be. Day membership comes from `eventStartDay`, which
+ * reads each event's own offset rather than the server's timezone (see
+ * lib/calendar-dates.ts).
  */
 function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalendarEvent[] {
   const allDay = getAllDayEvents(events, day);
   const timed = events
-    .filter((event) => event.start.dateTime && isSameLocalDay(new Date(event.start.dateTime), day))
-    .sort((a, b) => new Date(a.start.dateTime as string).getTime() - new Date(b.start.dateTime as string).getTime());
+    .filter((event) => event.start.dateTime && isSameLocalDay(eventStartDay(event), day))
+    .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime());
   return [...allDay, ...timed];
 }
 
@@ -144,9 +121,7 @@ export function AgendaView({
               <div className="cards">
                 {dayEvents.map((event) => {
                   const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
-                  const timeLabel = event.start.dateTime
-                    ? formatTimeLabel(new Date(event.start.dateTime))
-                    : "All day";
+                  const timeLabel = event.start.dateTime ? formatTimeLabel(event.start.dateTime) : "All day";
                   const calendarName = calendarNameById.get(event.calendarId) ?? "";
 
                   return (

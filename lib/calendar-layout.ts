@@ -1,35 +1,32 @@
+import { addDays, atMidnight, fractionalHour, isSameLocalDay, parseZonedDateTime } from "./calendar-dates";
 import type { GoogleCalendarEvent } from "./google-calendar";
 
-/** First hour (inclusive, local time) shown on the Day/Week hour grid. */
+/** First hour (inclusive, event-local time) shown on the Day/Week hour grid. */
 export const GRID_START_HOUR = 7;
-/** Hour (exclusive, local time) at which the Day/Week hour grid ends. */
+/** Hour (exclusive, event-local time) at which the Day/Week hour grid ends. */
 export const GRID_END_HOUR = 22;
 /** Pixel height of a single hour row in the hour grid. */
 export const HOUR_ROW_HEIGHT = 56;
 
 export type PositionedEvent = { event: GoogleCalendarEvent; top: number; height: number };
 
-/** Normalizes a Date to local midnight, discarding any time-of-day component. */
-function atMidnight(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function isSameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-/** Local-time hour-of-day as a fractional number, e.g. 9:15 AM -> 9.25. */
-function fractionalHour(date: Date): number {
-  return date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
-}
-
 /**
  * Converts timed events on `day` into pixel positions for the hour grid.
- * Google's `dateTime` strings carry an explicit UTC offset (e.g. "-04:00");
- * the native `Date` constructor correctly honors that offset, and the local
- * accessors (`getHours`/`getMinutes`) read back the wall-clock time the
- * offset encodes — using the UTC accessors here would misplace events whose
- * offset differs from the server's.
+ *
+ * Google's `dateTime` strings carry their own explicit UTC offset (e.g.
+ * `"2026-10-22T09:00:00-04:00"`), and that offset — not the server's `TZ` —
+ * defines the wall-clock day and hour the event should render at. So the
+ * event's date/time components are read straight out of the string via
+ * `parseZonedDateTime`; feeding the string through `new Date(...)` and the
+ * local accessors instead would re-project the instant into whatever
+ * timezone the process happens to run under (on Vercel, UTC), misplacing
+ * every non-matching event by the offset difference and pushing evening
+ * events onto the wrong day entirely.
+ *
+ * `day` itself is a plain calendar date (`new Date(y, m, d)`), so reading it
+ * back with the local accessors is safe — it carries no real instant.
+ * `durationHours` uses `.getTime()` subtraction, which is an absolute-instant
+ * difference and therefore timezone-independent.
  *
  * All-day events (no `dateTime`) are excluded entirely; see `getAllDayEvents`.
  * Events that fall on a different day, or whose start lies outside
@@ -44,19 +41,19 @@ export function layoutTimedEvents(events: GoogleCalendarEvent[], day: Date): Pos
       continue;
     }
 
-    const start = new Date(event.start.dateTime);
-    const end = new Date(event.end.dateTime);
+    const startParts = parseZonedDateTime(event.start.dateTime);
 
-    if (!isSameLocalDay(start, day)) {
+    if (!isSameLocalDay(new Date(startParts.year, startParts.month, startParts.day), day)) {
       continue;
     }
 
-    const startHour = fractionalHour(start);
+    const startHour = fractionalHour(startParts);
     if (startHour < GRID_START_HOUR || startHour >= GRID_END_HOUR) {
       continue;
     }
 
-    const durationHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+    const durationHours =
+      (new Date(event.end.dateTime).getTime() - new Date(event.start.dateTime).getTime()) / (1000 * 60 * 60);
 
     positioned.push({
       event,
@@ -68,7 +65,16 @@ export function layoutTimedEvents(events: GoogleCalendarEvent[], day: Date): Pos
   return positioned;
 }
 
-/** Returns the events in `events` that are all-day (no `dateTime`) and fall on `day`. */
+/**
+ * Returns the events in `events` that are all-day (no `dateTime`) and fall on `day`.
+ *
+ * Unlike the timed path above, this needs no offset handling: an all-day
+ * event's `date` is a bare `YYYY-MM-DD` with no offset at all, so parsing it
+ * as `${date}T00:00:00` yields a plain calendar date in the reading runtime,
+ * which is then compared against `day` — also a plain calendar date in that
+ * same runtime. Construction and comparison share one local interpretation,
+ * so the result is the same under any `TZ`.
+ */
 export function getAllDayEvents(events: GoogleCalendarEvent[], day: Date): GoogleCalendarEvent[] {
   const target = atMidnight(day);
 
@@ -82,8 +88,4 @@ export function getAllDayEvents(events: GoogleCalendarEvent[], day: Date): Googl
 
     return start.getTime() <= target.getTime() && target.getTime() < end.getTime();
   });
-}
-
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }

@@ -1,5 +1,12 @@
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
+  WEEKDAY_NAMES_UPPER,
+  formatTimeLabel,
+  fractionalHour,
+  isSameLocalDay,
+  localParts,
+} from "@/lib/calendar-dates";
+import {
   GRID_END_HOUR,
   GRID_START_HOUR,
   HOUR_ROW_HEIGHT,
@@ -8,37 +15,17 @@ import {
 } from "@/lib/calendar-layout";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 
-const DOW_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
-
 /** The fixed set of hour rows shown on the grid, e.g. [7, 8, ..., 21] for the default 7 AM–10 PM window. */
 const GRID_HOURS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => GRID_START_HOUR + i);
 
 /** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
 const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
 
-function isSameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-/** Local-time hour-of-day as a fractional number, e.g. 9:15 AM -> 9.25. */
-function fractionalHour(date: Date): number {
-  return date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
-}
-
 /** Formats an hour-of-day (0-23) as a grid row label, e.g. 7 -> "7 AM", 12 -> "12 PM". */
 function formatHourLabel(hour: number): string {
   const period = hour < 12 ? "AM" : "PM";
   const displayHour = hour % 12 === 0 ? 12 : hour % 12;
   return `${displayHour} ${period}`;
-}
-
-/** Formats a Date's wall-clock time for an event's subtitle, e.g. "9:00 AM". */
-function formatTimeLabel(date: Date): string {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const period = hours < 12 ? "AM" : "PM";
-  const displayHour = hours % 12 === 0 ? 12 : hours % 12;
-  return `${displayHour}:${minutes.toString().padStart(2, "0")} ${period}`;
 }
 
 /**
@@ -80,7 +67,7 @@ export function HourGrid({
           className={isSameLocalDay(day, today) ? "wg-day-head today" : "wg-day-head"}
           style={{ gridColumn: index + 2 }}
         >
-          <span className="dow">{DOW_NAMES[day.getDay()]}</span>
+          <span className="dow">{WEEKDAY_NAMES_UPPER[day.getDay()]}</span>
           <span className="num">{day.getDate()}</span>
         </div>
       ))}
@@ -106,7 +93,10 @@ export function HourGrid({
 
       {days.map((day, index) => {
         const isToday = isSameLocalDay(day, today);
-        const nowTop = isToday ? (fractionalHour(now) - GRID_START_HOUR) * HOUR_ROW_HEIGHT : null;
+        // `now` is a real "now" read in the rendering runtime, so its
+        // runtime-local wall clock is the intended frame — unlike an event's
+        // `dateTime`, which carries its own offset (see calendar-dates.ts).
+        const nowTop = isToday ? (fractionalHour(localParts(now)) - GRID_START_HOUR) * HOUR_ROW_HEIGHT : null;
 
         return (
           <div key={day.getTime()} className="wg-col" style={{ gridColumn: index + 2 }}>
@@ -116,12 +106,11 @@ export function HourGrid({
 
             {layoutTimedEvents(events, day).map(({ event, top, height }) => {
               const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
-              // layoutTimedEvents only returns events with a timed start, so this is non-null.
-              const start = new Date(event.start.dateTime as string);
               return (
                 <div key={event.id} className={`wg-event ${colorToken}`} style={{ top, height }}>
                   <span className="et">{event.summary}</span>
-                  <span className="es">{formatTimeLabel(start)}</span>
+                  {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
+                  <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>
                 </div>
               );
             })}

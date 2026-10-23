@@ -14,6 +14,8 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import type { CalendarColorToken } from "../lib/calendar-colors";
+
 const tsvector = customType<{ data: string }>({
   dataType() {
     return "tsvector";
@@ -161,6 +163,23 @@ export const canvasSync = pgTable(
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
   },
   (table) => [unique().on(table.userId, table.canvasAssignmentId)],
+);
+
+export const taskMetadata = pgTable(
+  "task_metadata",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    googleTaskId: text("google_task_id").notNull(),
+    googleTaskListId: text("google_task_list_id").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    colorToken: text("color_token").$type<CalendarColorToken>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique().on(table.userId, table.googleTaskId, table.googleTaskListId)],
 );
 
 export const pushSubscriptions = pgTable(

@@ -1,3 +1,5 @@
+import { connection } from "next/server";
+
 import { auth } from "../../../auth";
 import { CalendarToolbar } from "../../../components/calendar/CalendarToolbar";
 import { ReconnectBanner } from "../../../components/calendar/ReconnectBanner";
@@ -84,6 +86,15 @@ export default async function CalendarPage({
 }: {
   searchParams: Promise<{ view?: string; date?: string }>;
 }) {
+  // `parseDate`'s fallback (`new Date()`) is a non-deterministic value with no
+  // traceable dependency on `searchParams` when no `date` param is given, so
+  // Next's Cache Components analysis flags it as unstable during prerendering
+  // unless the render is explicitly marked dynamic first — `connection()` is
+  // Next's sanctioned way to do that (see `instant = false` above, which
+  // already opts this page out of static rendering for the same underlying
+  // reason: it reads cookies via `auth()`).
+  await connection();
+
   const params = await searchParams;
   const view = parseView(params.view);
   const date = parseDate(params.date);

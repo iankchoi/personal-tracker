@@ -1,12 +1,9 @@
 import type { CalendarColorToken } from "@/lib/calendar-colors";
+import { addDays } from "@/lib/calendar-dates";
 import { getViewRange } from "@/lib/calendar-ranges";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 
 import { HourGrid } from "./HourGrid";
-
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-}
 
 /**
  * Week view: a thin composition layer deriving the 7 visible days from

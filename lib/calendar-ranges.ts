@@ -1,45 +1,13 @@
+import {
+  MONTH_NAMES_FULL,
+  MONTH_NAMES_SHORT,
+  WEEKDAY_NAMES_FULL,
+  addDays,
+  atMidnight,
+} from "./calendar-dates";
+
 export type ViewType = "day" | "week" | "month" | "agenda";
 export type ViewRange = { start: Date; end: Date; label: string };
-
-const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTH_NAMES_FULL = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-const MONTH_NAMES_SHORT = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-/** Normalizes a Date to local midnight, discarding any time-of-day component. */
-function atMidnight(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-/** Adds (or subtracts, for negative counts) whole days using local-calendar arithmetic. */
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-}
 
 /**
  * Adds (or subtracts) whole calendar months, keeping the same day-of-month when
@@ -55,7 +23,7 @@ function addMonths(date: Date, months: number): Date {
 }
 
 function formatFullDayLabel(date: Date): string {
-  const weekday = WEEKDAY_NAMES[date.getDay()];
+  const weekday = WEEKDAY_NAMES_FULL[date.getDay()];
   const month = MONTH_NAMES_FULL[date.getMonth()];
   return `${weekday}, ${month} ${date.getDate()}, ${date.getFullYear()}`;
 }

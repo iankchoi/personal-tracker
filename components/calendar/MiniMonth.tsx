@@ -1,61 +1,11 @@
-const MONTH_NAMES_FULL = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-const DOW_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
-
-/** Normalizes a Date to local midnight, discarding any time-of-day component. */
-function atMidnight(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-/** Adds (or subtracts, for negative counts) whole days using local-calendar arithmetic. */
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-}
-
-function isSameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-function isSameLocalMonth(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
-}
-
-/**
- * Builds the grid of weeks (each a 7-element array of Dates) covering the
- * calendar month that `referenceDate` falls in, padded with the trailing
- * days of the previous month and the leading days of the next month so every
- * week row has exactly 7 cells. The number of rows varies (4-6) depending on
- * how the month's days align with the week grid — not hardcoded to 5.
- */
-function buildWeeks(referenceDate: Date): Date[][] {
-  const monthStart = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1);
-  const gridStart = addDays(monthStart, -monthStart.getDay());
-  const daysInMonth = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 0).getDate();
-  const totalCells = monthStart.getDay() + daysInMonth;
-  const weekCount = Math.ceil(totalCells / 7);
-
-  const weeks: Date[][] = [];
-  for (let week = 0; week < weekCount; week++) {
-    const days: Date[] = [];
-    for (let day = 0; day < 7; day++) {
-      days.push(addDays(gridStart, week * 7 + day));
-    }
-    weeks.push(days);
-  }
-  return weeks;
-}
+import {
+  MONTH_NAMES_FULL,
+  WEEKDAY_LETTERS,
+  atMidnight,
+  buildWeeks,
+  isSameLocalDay,
+  isSameLocalMonth,
+} from "@/lib/calendar-dates";
 
 /**
  * Shared mini-month calendar, ported from the mockup's `.mini-month` markup.
@@ -115,7 +65,7 @@ export function MiniMonth({
         </div>
       </header>
       <div className="mini-dow-row">
-        {DOW_LETTERS.map((letter, index) => (
+        {WEEKDAY_LETTERS.map((letter, index) => (
           <div className="mini-dow" key={index}>
             {letter}
           </div>

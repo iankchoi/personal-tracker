@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { listCalendars, listEvents } from "../../lib/google-calendar";
+import { createEvent, deleteEvent, listCalendars, listEvents, updateEvent } from "../../lib/google-calendar";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -39,4 +39,93 @@ test("listEvents throws a descriptive error on a non-ok response, rather than re
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401 }));
 
   await expect(listEvents("bad-token", "primary", "2026-10-22T00:00:00Z", "2026-10-23T00:00:00Z")).rejects.toThrow();
+});
+
+test("createEvent POSTs to the calendar's events endpoint and returns the created event", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      id: "new1",
+      summary: "Standup",
+      start: { dateTime: "2026-10-22T09:00:00-04:00" },
+      end: { dateTime: "2026-10-22T10:00:00-04:00" },
+    }),
+  }));
+
+  const result = await createEvent("tok", "primary", {
+    summary: "Standup",
+    start: { dateTime: "2026-10-22T09:00:00-04:00" },
+    end: { dateTime: "2026-10-22T10:00:00-04:00" },
+  });
+
+  expect(result.calendarId).toBe("primary");
+  expect(fetch).toHaveBeenCalledWith(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+    expect.objectContaining({ method: "POST" }),
+  );
+});
+
+test("createEvent requests conferenceDataVersion=1 when conferenceData.createRequest is set", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      id: "new2",
+      summary: "Video call",
+      start: { dateTime: "2026-10-22T09:00:00-04:00" },
+      end: { dateTime: "2026-10-22T10:00:00-04:00" },
+      conferenceData: { createRequest: { requestId: "req1" } },
+    }),
+  }));
+
+  await createEvent("tok", "primary", {
+    summary: "Video call",
+    start: { dateTime: "2026-10-22T09:00:00-04:00" },
+    end: { dateTime: "2026-10-22T10:00:00-04:00" },
+    conferenceData: { createRequest: { requestId: "req1" } },
+  });
+
+  expect(fetch).toHaveBeenCalledWith(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1",
+    expect.objectContaining({ method: "POST" }),
+  );
+});
+
+test("updateEvent PATCHes the specific event", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      id: "evt1",
+      summary: "Updated standup",
+      start: { dateTime: "2026-10-22T09:30:00-04:00" },
+      end: { dateTime: "2026-10-22T10:00:00-04:00" },
+    }),
+  }));
+
+  const result = await updateEvent("tok", "primary", "evt1", {
+    summary: "Updated standup",
+    start: { dateTime: "2026-10-22T09:30:00-04:00" },
+  });
+
+  expect(result.calendarId).toBe("primary");
+  expect(fetch).toHaveBeenCalledWith(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1",
+    expect.objectContaining({ method: "PATCH" }),
+  );
+});
+
+test("deleteEvent DELETEs the specific event", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+
+  await deleteEvent("tok", "primary", "evt1");
+
+  expect(fetch).toHaveBeenCalledWith(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1",
+    expect.objectContaining({ method: "DELETE" }),
+  );
+});
+
+test("deleteEvent throws on a non-ok response", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+  await expect(deleteEvent("tok", "primary", "evt1")).rejects.toThrow();
 });

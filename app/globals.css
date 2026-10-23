@@ -291,6 +291,23 @@ a { color: inherit; text-decoration: none; }
 
 .empty-block { display: flex; align-items: center; justify-content: center; min-height: 90px; border: 1px dashed var(--control); border-radius: 8px; color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
 
+/* ---- task checkboxes (Task 7): checkbox + title (+ optional due time), rendered alongside event chips/cards in all four calendar views; `.task-chip`'s per-token classes mirror `.wg-event`/`.wg-chip`/`.mg-chip`/`.src`'s one-class-per-CalendarColorToken convention ---- */
+.task-chip { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; cursor: pointer; }
+.task-chip.cal { background: var(--cal-bg); color: var(--cal-ink); }
+.task-chip.wk { background: var(--wk-bg); color: var(--wk-ink); }
+.task-chip.rem { background: var(--rem-bg); color: var(--rem-ink); }
+.task-chip.note { background: var(--note-bg); color: var(--note-ink); }
+.task-chip.jour { background: var(--jour-bg); color: var(--jour-ink); }
+.task-chip.cv { background: var(--cv-bg); color: var(--cv-ink); }
+.task-check { flex: none; width: 13px; height: 13px; accent-color: currentColor; cursor: pointer; }
+.task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-time { flex: none; opacity: .75; font-weight: 500; }
+.task-done { text-decoration: line-through; opacity: 0.6; }
+.wg-task .task-chip { height: 100%; }
+.wg-allday .task-chip { margin-top: 2px; }
+.mg-events .task-chip { font-size: 11px; }
+.cards > .task-chip { height: var(--row-height); padding: 0 16px; border-radius: 12px; }
+
 /* ---- error / reconnect banner states (ported from .taste-skill/build/home-error.html) ---- */
 .error-block { display: flex; align-items: center; gap: 8px; padding: 18px 0; color: var(--text); font-size: 13px; flex-wrap: wrap; }
 .error-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--negative); flex: none; }

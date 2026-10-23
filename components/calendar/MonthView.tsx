@@ -4,6 +4,7 @@ import {
   buildWeeks,
   eventStart,
   eventStartDay,
+  formatDateParam,
   isSameLocalDay,
   isSameLocalMonth,
 } from "@/lib/calendar-dates";
@@ -12,11 +13,16 @@ import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
-/** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. */
+import { TaskCheckbox } from "./TaskCheckbox";
+
+/** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. Tasks count as chips too. */
 const MAX_VISIBLE_CHIPS = 3;
 
 /** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
 const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
+
+/** A cell's event chips and task checkboxes merged into one orderable list, so overflow counting (`MAX_VISIBLE_CHIPS`) treats both uniformly. */
+type DayEntry = { kind: "event"; event: GoogleCalendarEvent } | { kind: "task"; task: CalendarTaskItem };
 
 /**
  * All events (all-day or timed) that fall on `day`, all-day events first and
@@ -41,6 +47,12 @@ function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalend
   return [...allDay, ...timed];
 }
 
+/** Tasks due on `day`, mirroring `AgendaView`'s sibling helper of the same name. */
+function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[] {
+  const dayParam = formatDateParam(day);
+  return tasks.filter((task) => task.dueDate === dayParam);
+}
+
 /**
  * Month view: ports the mockup's `.month-grid`/`.mg-dow-row`/`.mg-weeks`/
  * `.mg-week`/`.mg-cell` markup. Leading/trailing days from adjacent months
@@ -54,12 +66,17 @@ function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalend
  * (`.mg-chip.cal`/`.wk`/`.rem`/`.note`/`.jour`/`.cv`), so the token string
  * returned by `colorByCalendar` is used directly as the chip's class name.
  *
- * `tasks`/`taskLists` are threaded through by the page (Task 6) but not yet
- * rendered here — that's Task 7.
+ * `tasks` due on each day are merged into that same cell (after its event
+ * chips, per Task 7's "implementer's call" on ordering) and rendered via
+ * `TaskCheckbox`, counting toward the same `MAX_VISIBLE_CHIPS` cap and "+N
+ * more" overflow as events — see the shared `DayEntry` type above.
+ * `taskLists` is still unused here — nothing in Month view needs the list
+ * metadata itself, only the tasks.
  */
 export function MonthView({
   referenceDate,
   events,
+  tasks = [],
   colorByCalendar,
   today,
 }: {
@@ -86,8 +103,13 @@ export function MonthView({
           <div className="mg-week" key={week[0].getTime()}>
             {week.map((day) => {
               const dayEvents = getEventsForDay(events, day);
-              const visibleEvents = dayEvents.slice(0, MAX_VISIBLE_CHIPS);
-              const overflowCount = dayEvents.length - visibleEvents.length;
+              const dayTasks = getTasksForDay(tasks, day);
+              const entries: DayEntry[] = [
+                ...dayEvents.map((event): DayEntry => ({ kind: "event", event })),
+                ...dayTasks.map((task): DayEntry => ({ kind: "task", task })),
+              ];
+              const visibleEntries = entries.slice(0, MAX_VISIBLE_CHIPS);
+              const overflowCount = entries.length - visibleEntries.length;
 
               const classes = ["mg-cell"];
               if (!isSameLocalMonth(day, referenceDate)) classes.push("outside");
@@ -96,13 +118,16 @@ export function MonthView({
               return (
                 <div className={classes.join(" ")} key={day.getTime()}>
                   <span className="mg-date">{day.getDate()}</span>
-                  {dayEvents.length > 0 && (
+                  {entries.length > 0 && (
                     <div className="mg-events">
-                      {visibleEvents.map((event) => {
-                        const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+                      {visibleEntries.map((entry) => {
+                        if (entry.kind === "task") {
+                          return <TaskCheckbox key={entry.task.id} task={entry.task} />;
+                        }
+                        const colorToken = colorByCalendar[entry.event.calendarId] ?? FALLBACK_COLOR_TOKEN;
                         return (
-                          <span key={event.id} className={`mg-chip ${colorToken}`}>
-                            {event.summary}
+                          <span key={entry.event.id} className={`mg-chip ${colorToken}`}>
+                            {entry.event.summary}
                           </span>
                         );
                       })}

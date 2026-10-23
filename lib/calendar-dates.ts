@@ -175,6 +175,22 @@ export function isSameLocalMonth(a: Date, b: Date): boolean {
 }
 
 /**
+ * Formats a Date as `YYYY-MM-DD` in local time — the shape the `date` search
+ * param, `CalendarTaskItem.dueDate`, and Google's date-only `due`/`date`
+ * fields all share. `app/(app)/calendar/page.tsx` and `CalendarToolbar.tsx`
+ * each still carry their own pre-existing copy of this (predating this
+ * shared module's reach into those files); this export exists so new
+ * call sites (Task 7's `getTasksForDay` helpers) have one to import rather
+ * than adding a fourth copy.
+ */
+export function formatDateParam(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
  * Builds the grid of weeks (each a 7-element array of Dates) covering the
  * calendar month that `referenceDate` falls in, padded with the trailing
  * days of the previous month and the leading days of the next month so every

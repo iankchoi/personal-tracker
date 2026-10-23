@@ -5,6 +5,7 @@ import {
   addDays,
   eventStart,
   eventStartDay,
+  formatDateParam,
   formatTimeLabel,
   isSameLocalDay,
 } from "@/lib/calendar-dates";
@@ -16,6 +17,7 @@ import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import { CalendarsLegend } from "./CalendarsLegend";
 import { MiniMonth } from "./MiniMonth";
+import { TaskCheckbox } from "./TaskCheckbox";
 
 /** Length of the agenda window, matching `getViewRange("agenda", ...)` in lib/calendar-ranges.ts. */
 const AGENDA_WINDOW_DAYS = 14;
@@ -67,6 +69,12 @@ function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalend
   return [...allDay, ...timed];
 }
 
+/** Tasks due on `day`, mirroring `MonthView`'s sibling helper of the same name. */
+function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[] {
+  const dayParam = formatDateParam(day);
+  return tasks.filter((task) => task.dueDate === dayParam);
+}
+
 /**
  * Agenda view: ports the mockup's `.agenda-layout` — an `.agenda-col` of
  * `.agenda-group`s (one per day in the 14-day agenda window that has at
@@ -87,12 +95,17 @@ function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalend
  * values, so the token string from `colorByCalendar` is used directly as
  * the row's `.src` class name.
  *
- * `tasks`/`taskLists` are threaded through by the page (Task 6) but not yet
- * rendered here — that's Task 7.
+ * `tasks` due on each day are merged into that same day's group (rendered
+ * after its event rowcards, per Task 7's "implementer's call" on ordering)
+ * via `TaskCheckbox`; a day with tasks but zero events is no longer skipped
+ * (the original "skip empty days" filter now checks both). `taskLists` is
+ * still unused here — nothing in Agenda view needs the list metadata
+ * itself, only the tasks.
  */
 export function AgendaView({
   referenceDate,
   events,
+  tasks = [],
   calendars,
   colorByCalendar,
   today,
@@ -110,16 +123,16 @@ export function AgendaView({
   const calendarNameById = new Map(calendars.map((calendar) => [calendar.id, calendar.summary]));
 
   const groups = days
-    .map((day) => ({ day, dayEvents: getEventsForDay(events, day) }))
-    .filter(({ dayEvents }) => dayEvents.length > 0);
+    .map((day) => ({ day, dayEvents: getEventsForDay(events, day), dayTasks: getTasksForDay(tasks, day) }))
+    .filter(({ dayEvents, dayTasks }) => dayEvents.length > 0 || dayTasks.length > 0);
 
   return (
     <div className="agenda-layout">
       <div className="agenda-col">
         {groups.length === 0 ? (
-          <div className="empty-block">No events scheduled for the next 14 days.</div>
+          <div className="empty-block">No events or tasks scheduled for the next 14 days.</div>
         ) : (
-          groups.map(({ day, dayEvents }) => (
+          groups.map(({ day, dayEvents, dayTasks }) => (
             <div className="agenda-group" key={day.getTime()}>
               <div className="agenda-date">
                 {formatGroupLabel(day, today)}
@@ -139,6 +152,9 @@ export function AgendaView({
                     </div>
                   );
                 })}
+                {dayTasks.map((task) => (
+                  <TaskCheckbox key={task.id} task={task} />
+                ))}
               </div>
             </div>
           ))

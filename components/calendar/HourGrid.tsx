@@ -1,6 +1,7 @@
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
+  formatDateParam,
   formatTimeLabel,
   fractionalHour,
   isSameLocalDay,
@@ -13,7 +14,10 @@ import {
   getAllDayEvents,
   layoutTimedEvents,
 } from "@/lib/calendar-layout";
+import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
+
+import { TaskCheckbox } from "./TaskCheckbox";
 
 /** The fixed set of hour rows shown on the grid, e.g. [7, 8, ..., 21] for the default 7 AM–10 PM window. */
 const GRID_HOURS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => GRID_START_HOUR + i);
@@ -26,6 +30,43 @@ function formatHourLabel(hour: number): string {
   const period = hour < 12 ? "AM" : "PM";
   const displayHour = hour % 12 === 0 ? 12 : hour % 12;
   return `${displayHour} ${period}`;
+}
+
+type PositionedTask = { task: CalendarTaskItem; top: number; height: number };
+
+/**
+ * Tasks due on `day` with a `dueTime`, positioned into the same timed-block
+ * shape `layoutTimedEvents` produces. Since tasks have no duration, each
+ * gets a fixed 30-minute-tall block (`HOUR_ROW_HEIGHT * 0.5`) rather than a
+ * computed height. A task whose `dueTime` falls outside the grid's fixed
+ * [GRID_START_HOUR, GRID_END_HOUR) window is excluded, matching
+ * `layoutTimedEvents`'s own out-of-window exclusion for events.
+ */
+function layoutTimedTasks(tasks: CalendarTaskItem[], day: Date): PositionedTask[] {
+  const dayParam = formatDateParam(day);
+  const positioned: PositionedTask[] = [];
+
+  for (const task of tasks) {
+    if (task.dueDate !== dayParam || !task.dueTime) {
+      continue;
+    }
+
+    const [hourStr, minuteStr] = task.dueTime.split(":");
+    const hour = Number(hourStr) + Number(minuteStr) / 60;
+    if (hour < GRID_START_HOUR || hour >= GRID_END_HOUR) {
+      continue;
+    }
+
+    positioned.push({ task, top: (hour - GRID_START_HOUR) * HOUR_ROW_HEIGHT, height: HOUR_ROW_HEIGHT * 0.5 });
+  }
+
+  return positioned;
+}
+
+/** Tasks due on `day` with no `dueTime` — these render in the `.wg-allday` row alongside all-day event chips. */
+function getAllDayTasks(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[] {
+  const dayParam = formatDateParam(day);
+  return tasks.filter((task) => task.dueDate === dayParam && !task.dueTime);
 }
 
 /**
@@ -46,11 +87,13 @@ function formatHourLabel(hour: number): string {
 export function HourGrid({
   days,
   events,
+  tasks = [],
   colorByCalendar,
   today,
 }: {
   days: Date[];
   events: GoogleCalendarEvent[];
+  tasks?: CalendarTaskItem[];
   colorByCalendar: Record<string, CalendarColorToken>;
   today: Date;
 }) {
@@ -82,6 +125,9 @@ export function HourGrid({
               </span>
             );
           })}
+          {getAllDayTasks(tasks, day).map((task) => (
+            <TaskCheckbox key={task.id} task={task} />
+          ))}
         </div>
       ))}
 
@@ -114,6 +160,12 @@ export function HourGrid({
                 </div>
               );
             })}
+
+            {layoutTimedTasks(tasks, day).map(({ task, top, height }) => (
+              <div key={`task-${task.id}`} className="wg-event wg-task" style={{ top, height }}>
+                <TaskCheckbox task={task} />
+              </div>
+            ))}
 
             {nowTop !== null && <div className="wg-now" style={{ top: nowTop }} />}
           </div>

@@ -17,12 +17,15 @@ import { UpNext } from "./UpNext";
  * no multi-day range to highlight, only the single `selectedDate` (the day
  * being viewed, passed as both `referenceDate` and `selectedDate`).
  *
- * `tasks`/`taskLists` are threaded through by the page (Task 6) but not yet
- * rendered here — that's Task 7.
+ * `tasks` is threaded through to `HourGrid` as of Task 7, which buckets it by
+ * day itself (same "pass the flat list, let the grid re-bucket" shape
+ * `events` already uses). `taskLists` is still unused here — nothing in Day
+ * view needs the list metadata itself, only the tasks.
  */
 export function DayView({
   referenceDate,
   events,
+  tasks,
   calendars,
   colorByCalendar,
   upcoming,
@@ -37,7 +40,13 @@ export function DayView({
 }) {
   return (
     <div className="day-layout">
-      <HourGrid days={[referenceDate]} events={events} colorByCalendar={colorByCalendar} today={new Date()} />
+      <HourGrid
+        days={[referenceDate]}
+        events={events}
+        tasks={tasks}
+        colorByCalendar={colorByCalendar}
+        today={new Date()}
+      />
       <div className="day-rail">
         <MiniMonth referenceDate={referenceDate} selectedDate={referenceDate} />
         <UpNext upcoming={upcoming} />

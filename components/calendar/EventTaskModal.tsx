@@ -3,13 +3,16 @@
 import { useState } from "react";
 
 import type { EventActionInput } from "../../lib/actions/calendar-events";
+import type { TaskActionInput } from "../../lib/actions/calendar-tasks";
 import { tokenForColorId } from "../../lib/calendar-event-colors";
+import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import type { PopupState } from "./CalendarInteractionProvider";
 import { EventEditor } from "./EventEditor";
 import { QuickCreatePopup } from "./QuickCreatePopup";
+import { TaskEditor } from "./TaskEditor";
 
 /**
  * Maps a raw `GoogleCalendarEvent` (as read back from the API — see
@@ -48,6 +51,29 @@ function googleEventToEditorInitial(
     guestsCanModify: event.guestsCanModify,
     guestsCanInviteOthers: event.guestsCanInviteOthers,
     guestsCanSeeOtherGuests: event.guestsCanSeeOtherGuests,
+  };
+}
+
+/**
+ * Maps a `CalendarTaskItem` (the Tasks analog of `GoogleCalendarEvent` —
+ * already merged with its local `task_metadata` row by
+ * `lib/calendar-tasks-for-grid.ts`) into the flattened shape `TaskEditor`'s
+ * `initial` prop expects. Unlike `googleEventToEditorInitial`, there's no
+ * date-shape unwrapping to do here — `CalendarTaskItem.dueDate`/`dueTime`
+ * are already the bare `YYYY-MM-DD`/`HH:MM` strings `TaskEditor` needs, so
+ * they're passed straight through.
+ */
+function calendarTaskToEditorInitial(
+  task: CalendarTaskItem,
+): Partial<TaskActionInput> & { taskId: string; taskListId: string } {
+  return {
+    taskId: task.id,
+    taskListId: task.taskListId,
+    title: task.title,
+    dueDate: task.dueDate,
+    dueTime: task.dueTime,
+    notes: task.notes,
+    colorToken: task.colorToken,
   };
 }
 
@@ -93,6 +119,27 @@ function createPopupToEditorInitial(
 }
 
 /**
+ * Carries a "create" popup session's clicked date/hour (and, now that "More
+ * options" has been clicked, the task list) forward into `TaskEditor`'s
+ * `initial` shape. Mirrors `QuickCreatePopup`'s own Task defaulting rule: a
+ * specific hour (Day/Week slot click) seeds a due time there; no hour (a
+ * Month/Agenda day-box click) leaves `dueTime: null` — "no time set" — since
+ * Tasks, unlike Events, don't always get a time.
+ */
+function createPopupToTaskEditorInitial(
+  popup: { date: Date; hour?: number },
+  taskListId: string,
+): Partial<TaskActionInput> & { taskListId: string } {
+  const dateStr = formatDateInput(popup.date);
+
+  return {
+    taskListId,
+    dueDate: dateStr,
+    dueTime: popup.hour != null ? `${String(popup.hour).padStart(2, "0")}:00` : null,
+  };
+}
+
+/**
  * Renders whichever popup/editor `popup` currently calls for, or nothing
  * when it's `{ mode: "closed" }`. `CalendarInteractionProvider` renders this
  * once, after its children, so it's always the single surface controlled by
@@ -104,10 +151,8 @@ function createPopupToEditorInitial(
  * starts back at the quick popup, never stuck mid-expansion from a previous
  * one). `"edit-event"` always renders the full `EventEditor` directly, no
  * quick-popup step, per the design doc ("Clicking an existing event or task
- * opens the identical popup/editor").
- *
- * `"edit-task"` is still a bare `null` — Task 4 of this plan fills in the
- * Task editor.
+ * opens the identical popup/editor"). `"edit-task"` renders the full
+ * `TaskEditor` directly for the same reason.
  */
 export function EventTaskModal(props: {
   popup: PopupState;
@@ -143,6 +188,20 @@ export function EventTaskModal(props: {
     );
   }
 
+  if (popup.mode === "create" && popup.kind === "task" && expanded) {
+    const defaultTaskListId = taskLists[0]?.id ?? "";
+    return (
+      <TaskEditor
+        mode="create"
+        initial={createPopupToTaskEditorInitial(popup, defaultTaskListId)}
+        taskLists={taskLists}
+        onSaved={onClose}
+        onDeleted={onClose}
+        onCancel={onClose}
+      />
+    );
+  }
+
   if (popup.mode === "create") {
     return (
       <QuickCreatePopup
@@ -162,6 +221,19 @@ export function EventTaskModal(props: {
         mode="edit"
         initial={googleEventToEditorInitial(popup.event)}
         calendars={calendars}
+        onSaved={onClose}
+        onDeleted={onClose}
+        onCancel={onClose}
+      />
+    );
+  }
+
+  if (popup.mode === "edit-task") {
+    return (
+      <TaskEditor
+        mode="edit"
+        initial={calendarTaskToEditorInitial(popup.task)}
+        taskLists={taskLists}
         onSaved={onClose}
         onDeleted={onClose}
         onCancel={onClose}

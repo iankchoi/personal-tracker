@@ -7,6 +7,7 @@ import type { CalendarColorToken } from "../../lib/calendar-colors";
 import type { GoogleCalendarListEntry } from "../../lib/google-calendar";
 
 import { ColorPicker } from "./ColorPicker";
+import { LocationAutocomplete } from "./LocationAutocomplete";
 
 /** Icons match the sidebar's inline-SVG style exactly: `viewBox="0 0 24 24"`, 16x16 via CSS, `stroke-width: 1.6`, `stroke: currentColor`, no fill. */
 const ClockIcon = (
@@ -363,13 +364,7 @@ export function EventEditor(props: {
 
       <div className="ee-row">
         <span className="ee-icon">{PinIcon}</span>
-        <input
-          type="text"
-          placeholder="Add location"
-          aria-label="Location"
-          value={location}
-          onChange={(event) => setLocation(event.target.value)}
-        />
+        <LocationAutocomplete value={location} onChange={setLocation} />
       </div>
 
       <div className="ee-row">

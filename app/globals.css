@@ -316,6 +316,53 @@ a { color: inherit; text-decoration: none; }
 .mg-events .task-chip { font-size: 11px; }
 .cards > .task-chip { height: var(--row-height); padding: 0 16px; border-radius: 12px; }
 
+/* ---- event editor (Task 3): the "More options" full editor, a modal overlay reusing .create-popup's base look where it makes sense but wider, with one icon+control row per field ---- */
+.event-editor { width: 440px; max-width: calc(100vw - 32px); padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 10px; }
+.ee-error { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--pill-done-bg); color: var(--negative); font-size: 13px; font-weight: 500; }
+.ee-title-input { height: 40px; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; font-weight: 500; width: 100%; }
+.ee-title-input::placeholder { color: var(--faint); }
+.ee-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ee-icon { flex: none; display: flex; color: var(--muted); }
+.ee-icon svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+.ee-row input[type="text"], .ee-row input[type="email"], .ee-row input[type="date"], .ee-row input[type="time"], .ee-row input[type="number"], .ee-row select, .ee-row textarea { height: 36px; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.ee-row select:disabled { color: var(--muted); opacity: .85; }
+.ee-row textarea { height: auto; min-height: 64px; padding: 8px 10px; width: 100%; resize: vertical; }
+.ee-dash { color: var(--faint); }
+.ee-allday { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+.ee-meet-toggle { height: 36px; padding: 0 12px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.ee-meet-toggle[aria-pressed="true"] { background: var(--wk-bg); color: var(--wk-ink); border-color: var(--wk-accent); }
+.ee-description { align-items: flex-start; }
+.ee-description textarea { flex: 1; min-width: 0; }
+.ee-guests { align-items: flex-start; }
+.ee-guests-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.guest-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.guest-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border-radius: 999px; background: var(--raised); color: var(--text); font-size: 12px; font-weight: 500; }
+.guest-chip button { width: 18px; height: 18px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
+.guest-chip button:hover { background: var(--active); color: var(--text); }
+.guest-add { display: flex; gap: 6px; }
+.guest-add input { flex: 1; min-width: 0; }
+.guest-add button { height: 36px; padding: 0 12px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.ee-permissions { align-items: flex-start; }
+.ee-permissions-body { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text); }
+.ee-permissions-body label { display: flex; align-items: center; gap: 8px; }
+.ee-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.ee-spacer { flex: 1; }
+.ee-delete { height: 38px; padding: 0 16px; border: 1px solid var(--negative); border-radius: 999px; background: transparent; color: var(--negative); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; }
+.ee-cancel { height: 38px; padding: 0 16px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; }
+.ee-save { height: 38px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--text); color: var(--ground); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; }
+.ee-save:disabled, .ee-delete:disabled { opacity: .6; cursor: progress; }
+
+/* ---- color picker (Task 3): the shared 6-swatch picker used by Event (and, later, Task) editors ---- */
+.color-picker { display: flex; gap: 8px; }
+.color-swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+.color-swatch.cal { background: var(--cal-accent); }
+.color-swatch.wk { background: var(--wk-accent); }
+.color-swatch.rem { background: var(--rem-accent); }
+.color-swatch.note { background: var(--note-accent); }
+.color-swatch.jour { background: var(--jour-accent); }
+.color-swatch.cv { background: var(--cv-accent); }
+.color-swatch[aria-checked="true"] { border-color: var(--text); }
+
 /* ---- error / reconnect banner states (ported from .taste-skill/build/home-error.html) ---- */
 .error-block { display: flex; align-items: center; gap: 8px; padding: 18px 0; color: var(--text); font-size: 13px; flex-wrap: wrap; }
 .error-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--negative); flex: none; }

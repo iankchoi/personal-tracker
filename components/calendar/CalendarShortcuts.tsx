@@ -42,10 +42,21 @@ function isTypingTarget(element: Element | null): boolean {
  * `useCalendarInteraction().openCreate`, seeded with `new Date()` rather than
  * the viewed `date` since a shortcut press has no specific day/slot in mind.
  *
- * Ignored entirely while focus sits inside a text input, textarea, select, or
- * contenteditable region (e.g. while typing a title in the quick-create
- * popup itself), so a stray "d"/"n" keystroke while typing doesn't hijack the
- * view or pop open a second create popup.
+ * Ignored entirely in three cases:
+ *
+ * 1. **A modifier is held.** `⌘A`/`⌘D`/`⌘N` (and the Ctrl/Alt equivalents)
+ *    are browser and OS shortcuts — Select All, Bookmark, New Window — and
+ *    firing this app's single-letter handlers alongside them meant a `⌘A`
+ *    both selected the page *and* navigated to Agenda view.
+ * 2. **A popup/editor is open.** Checked via `popup.mode !== "closed"` rather
+ *    than by inspecting focus: clicking any non-input control inside an
+ *    editor (the Meet toggle, a color swatch, Save) leaves focus on a
+ *    `<button>`, which `isTypingTarget` doesn't catch — so continuing to type
+ *    could hijack the view mid-edit. Shortcuts firing *at all* while a modal
+ *    is open is the actual problem, whatever happens to hold focus.
+ * 3. **Focus sits in a text input, textarea, select, or contenteditable
+ *    region**, so a stray "d"/"n" typed into any field elsewhere on the page
+ *    doesn't hijack the view either.
  */
 export function CalendarShortcuts({
   date,
@@ -55,10 +66,19 @@ export function CalendarShortcuts({
   date: Date;
   go(view: ViewType, date: Date): void;
 }) {
-  const { openCreate } = useCalendarInteraction();
+  const { popup, openCreate } = useCalendarInteraction();
+  const popupIsOpen = popup.mode !== "closed";
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      if (popupIsOpen) {
+        return;
+      }
+
       if (isTypingTarget(document.activeElement)) {
         return;
       }
@@ -78,7 +98,7 @@ export function CalendarShortcuts({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [date, go, openCreate]);
+  }, [date, go, openCreate, popupIsOpen]);
 
   return null;
 }

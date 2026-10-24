@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { createTaskAction, deleteTaskAction, updateTaskAction, type TaskActionInput } from "../../lib/actions/calendar-tasks";
@@ -71,6 +72,7 @@ export function TaskEditor(props: {
   onCancel(): void;
 }) {
   const { mode, initial, taskLists, onSaved, onDeleted, onCancel } = props;
+  const router = useRouter();
 
   // "Today" is only ever used as a brand-new create session's fallback (no
   // clicked date to seed from) — mirroring EventEditor's own defaultWhen().
@@ -87,6 +89,9 @@ export function TaskEditor(props: {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** Saving an empty (or whitespace-only) title would blank a real task's name in Google Tasks — see `EventEditor`'s matching guard. */
+  const titleIsEmpty = title.trim() === "";
+
   async function handleSave() {
     setSaving(true);
     setError(null);
@@ -94,9 +99,20 @@ export function TaskEditor(props: {
       const input: TaskActionInput = {
         taskListId,
         title,
-        dueDate,
+        // A cleared `<input type="date">` reports `""`, not `null`. Passed
+        // through, `""` became the malformed `due: "T00:00:00.000Z"` on an
+        // edit, and on a create its falsiness quietly produced a task with no
+        // due date — which then renders nowhere on the calendar grid, with no
+        // explanation. `null` is the shape `TaskActionInput` documents for
+        // "no due date" and the one both actions branch on correctly.
+        dueDate: dueDate || null,
         dueTime: dueTime || null,
-        notes: notes || undefined,
+        // `notes || undefined` drops the key, which on a PATCH tells Google
+        // Tasks to keep the old notes — so clearing them never stuck. In edit
+        // mode the current string is sent as-is, `""` included (an explicit
+        // clear); create mode keeps omit-if-empty. Same rule as
+        // `EventEditor`'s description/location.
+        notes: mode === "edit" ? notes : notes || undefined,
         colorToken,
       };
 
@@ -105,6 +121,10 @@ export function TaskEditor(props: {
       } else {
         await updateTaskAction({ ...input, taskId: initial.taskId! });
       }
+      // The grid is server-rendered from Google Tasks, so it keeps showing
+      // the pre-save state until the server components re-run — the same
+      // `router.refresh()` `TaskCheckbox` does after `completeTaskAction`.
+      router.refresh();
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -121,6 +141,7 @@ export function TaskEditor(props: {
     setError(null);
     try {
       await deleteTaskAction({ taskListId, taskId: initial.taskId });
+      router.refresh();
       onDeleted();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -198,7 +219,13 @@ export function TaskEditor(props: {
         <button type="button" className="ee-cancel" onClick={onCancel}>
           Cancel
         </button>
-        <button type="button" className="ee-save" onClick={handleSave} disabled={saving}>
+        <button
+          type="button"
+          className="ee-save"
+          onClick={handleSave}
+          disabled={saving || titleIsEmpty}
+          title={titleIsEmpty ? "Add a title first" : undefined}
+        >
           Save
         </button>
       </div>

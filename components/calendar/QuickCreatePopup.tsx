@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { createEventAction, type EventActionInput } from "../../lib/actions/calendar-events";
@@ -8,6 +9,33 @@ import type { GoogleCalendarListEntry } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
 export type QuickCreateInitial = { kind: "event" | "task"; date: Date; hour?: number };
+
+/**
+ * Everything the user has entered in the quick popup so far, handed to
+ * `onMoreOptions` so the full editor can open pre-filled with it. Without
+ * this, "More options" re-derived the full editor's defaults from the
+ * original click (date/hour/primary calendar) and silently threw away the
+ * title typed, the times adjusted, and the calendar or task list chosen —
+ * which is the worst possible moment to lose input, since "More options" is
+ * exactly the click a user makes *after* finding the quick popup too small.
+ *
+ * `kind` is included because the Event/Task toggle lives in this popup too:
+ * clicking Task and then "More options" has to open the Task editor, not the
+ * Event editor the original click asked for.
+ */
+export type QuickCreateDraft = {
+  kind: "event" | "task";
+  title: string;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  /** `HH:MM` — the Event side's start/end range. */
+  startTime: string;
+  endTime: string;
+  /** `HH:MM`, or `""` for the Task side's "no time set". */
+  dueTime: string;
+  calendarId: string;
+  taskListId: string;
+};
 
 /** Formats a `Date` as the `YYYY-MM-DD` shape `<input type="date">` expects, in local time. */
 function formatDateInput(date: Date): string {
@@ -65,11 +93,12 @@ export function QuickCreatePopup(props: {
   calendars: GoogleCalendarListEntry[];
   taskLists: GoogleTaskList[];
   initial: QuickCreateInitial;
-  onMoreOptions(): void;
+  onMoreOptions(draft: QuickCreateDraft): void;
   onSaved(): void;
   onCancel(): void;
 }) {
   const { calendars, taskLists, initial, onMoreOptions, onSaved, onCancel } = props;
+  const router = useRouter();
 
   const [kind, setKind] = useState<"event" | "task">(initial.kind);
   const [title, setTitle] = useState("");
@@ -85,9 +114,11 @@ export function QuickCreatePopup(props: {
   const [taskListId, setTaskListId] = useState(taskLists[0]?.id ?? "");
 
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSave() {
     setSaving(true);
+    setError(null);
     try {
       if (kind === "event") {
         const input: EventActionInput = {
@@ -107,7 +138,19 @@ export function QuickCreatePopup(props: {
         };
         await createTaskAction(input);
       }
+      // The grid is server-rendered from Google, so the newly created
+      // event/task only appears once the page's server components re-run —
+      // same pattern `TaskCheckbox` uses after `completeTaskAction`. Without
+      // this the popup closes onto a calendar that still looks unchanged.
+      router.refresh();
       onSaved();
+    } catch (err) {
+      // This is the most-travelled creation path in the app; an unhandled
+      // rejection here left the popup sitting there looking like the Save
+      // click simply hadn't registered. Mirrors `EventEditor`/`TaskEditor`:
+      // the message renders inline, the popup stays open, `onSaved` is never
+      // called on failure.
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -115,6 +158,12 @@ export function QuickCreatePopup(props: {
 
   return (
     <div className="create-popup" role="dialog" aria-label={kind === "event" ? "Create event" : "Create task"}>
+      {error && (
+        <p className="cp-error" role="alert">
+          {error}
+        </p>
+      )}
+
       <input
         className="cp-title-input"
         type="text"
@@ -193,9 +242,15 @@ export function QuickCreatePopup(props: {
         </div>
       )}
 
-      <a className="cp-more" role="button" tabIndex={0} onClick={onMoreOptions}>
+      <button
+        type="button"
+        className="cp-more"
+        onClick={() =>
+          onMoreOptions({ kind, title, date: dateStr, startTime, endTime, dueTime, calendarId, taskListId })
+        }
+      >
         More options
-      </a>
+      </button>
 
       <div className="cp-actions">
         <button type="button" className="cp-cancel" onClick={onCancel}>

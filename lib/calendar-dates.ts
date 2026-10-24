@@ -191,6 +191,37 @@ export function formatDateParam(date: Date): string {
 }
 
 /**
+ * Google Calendar's all-day events carry an **exclusive** `end.date`: a
+ * single-day event on Oct 25 is reported as `{ start: { date: "2026-10-25" },
+ * end: { date: "2026-10-26" } }`, and a 3-day one ends `"2026-10-28"`. Humans
+ * (and therefore the editor's two date inputs) think in *inclusive* last-days,
+ * so these two helpers convert at exactly that boundary — one subtracting a day
+ * on the way in from Google, the other adding it back on the way out. Both go
+ * through `addDays`, so month/year rollover isn't reimplemented per call site.
+ *
+ * A value that isn't a `YYYY-MM-DD` date is returned unchanged rather than
+ * throwing: the "out" direction is fed straight from an `<input type="date">`,
+ * which reports `""` while empty or mid-edit, and a half-typed date must not
+ * blow up the save path before the editor's own validation can speak.
+ */
+export function allDayEndToInclusive(exclusiveEndDate: string): string {
+  if (!ISO_DATE.test(exclusiveEndDate)) {
+    return exclusiveEndDate;
+  }
+  const { year, month, day } = parseIsoDate(exclusiveEndDate);
+  return formatDateParam(addDays(new Date(year, month, day), -1));
+}
+
+/** The inverse of `allDayEndToInclusive` — see its doc comment. */
+export function allDayEndToExclusive(inclusiveEndDate: string): string {
+  if (!ISO_DATE.test(inclusiveEndDate)) {
+    return inclusiveEndDate;
+  }
+  const { year, month, day } = parseIsoDate(inclusiveEndDate);
+  return formatDateParam(addDays(new Date(year, month, day), 1));
+}
+
+/**
  * Builds the grid of weeks (each a 7-element array of Dates) covering the
  * calendar month that `referenceDate` falls in, padded with the trailing
  * days of the previous month and the leading days of the next month so every

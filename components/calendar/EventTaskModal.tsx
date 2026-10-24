@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { EventActionInput } from "../../lib/actions/calendar-events";
 import type { TaskActionInput } from "../../lib/actions/calendar-tasks";
+import { allDayEndToInclusive } from "../../lib/calendar-dates";
 import { tokenForColorId } from "../../lib/calendar-event-colors";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-calendar";
@@ -11,7 +12,8 @@ import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import type { PopupState } from "./CalendarInteractionProvider";
 import { EventEditor } from "./EventEditor";
-import { QuickCreatePopup } from "./QuickCreatePopup";
+import { ModalShell } from "./ModalShell";
+import { QuickCreatePopup, type QuickCreateDraft } from "./QuickCreatePopup";
 import { TaskEditor } from "./TaskEditor";
 
 /**
@@ -29,6 +31,14 @@ import { TaskEditor } from "./TaskEditor";
  * it would silently lose the event's actual date — this mapping is what
  * makes "read `start.date`, not `start.dateTime`" happen before the editor
  * ever runs.
+ *
+ * It's also where all-day `end` crosses from Google's convention into the
+ * editor's. Google's all-day `end.date` is **exclusive** — a one-day event on
+ * Oct 25 is reported as `start.date: "2026-10-25", end.date: "2026-10-26"` —
+ * whereas the editor's two date inputs show an inclusive last day. Without the
+ * `-1` here, a one-day all-day event opened as if it spanned two, and turning
+ * All-day off then produced a 25-hour timed event. `EventEditor`'s save path
+ * applies the matching `+1` on the way back out.
  */
 function googleEventToEditorInitial(
   event: GoogleCalendarEvent,
@@ -40,7 +50,11 @@ function googleEventToEditorInitial(
     calendarId: event.calendarId,
     title: event.summary,
     start: allDay ? event.start.date : event.start.dateTime,
-    end: allDay ? event.end.date : event.end.dateTime,
+    end: allDay
+      ? event.end.date
+        ? allDayEndToInclusive(event.end.date)
+        : event.start.date
+      : event.end.dateTime,
     allDay,
     description: event.description,
     location: event.location,
@@ -77,65 +91,46 @@ function calendarTaskToEditorInitial(
   };
 }
 
-/** Formats a `Date` as the `YYYY-MM-DD` shape `<input type="date">` expects, in local time — the same convention `QuickCreatePopup.tsx` uses. */
-function formatDateInput(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 /** Combines a `YYYY-MM-DD` date and an `HH:MM` time into the ISO date-time string `EventActionInput.start`/`end` expect — mirrors `QuickCreatePopup.tsx`'s `combineDateTime`. */
 function combineDateTime(dateStr: string, timeStr: string): string {
   return new Date(`${dateStr}T${timeStr}:00`).toISOString();
 }
 
 /**
- * Carries a "create" popup session's clicked date/hour (and, now that "More
- * options" has been clicked, the calendar) forward into `EventEditor`'s
- * `initial` shape, instead of losing the clicked slot and falling back to
- * `EventEditor`'s own "today at 9" default. Mirrors `QuickCreatePopup`'s own
- * defaulting rule: a specific hour (Day/Week slot click) seeds a 1-hour
- * timed event there; no hour (a Month/Agenda day-box click, or the toolbar's
- * "+ New event") still seeds a sensible 9-10 AM timed default — Events,
- * unlike Tasks, always get a time even with no hour to infer from.
+ * Carries everything the user already typed into the quick popup forward into
+ * `EventEditor`'s `initial` shape. The draft comes from `onMoreOptions` rather
+ * than being re-derived from the original `popup` click, which is the whole
+ * point: re-deriving gave back the clicked date/hour and the primary calendar
+ * and dropped the title, the adjusted times, and any non-default calendar the
+ * user had picked — losing work at exactly the moment they asked for *more*
+ * fields, not fewer.
  */
-function createPopupToEditorInitial(
-  popup: { date: Date; hour?: number },
-  calendarId: string,
+function draftToEventEditorInitial(
+  draft: QuickCreateDraft,
 ): Partial<EventActionInput> & { calendarId: string } {
-  const dateStr = formatDateInput(popup.date);
-  const startHour = popup.hour ?? 9;
-  const endHour = (startHour + 1) % 24;
-  const startTime = `${String(startHour).padStart(2, "0")}:00`;
-  const endTime = `${String(endHour).padStart(2, "0")}:00`;
-
   return {
-    calendarId,
-    start: combineDateTime(dateStr, startTime),
-    end: combineDateTime(dateStr, endTime),
+    calendarId: draft.calendarId,
+    title: draft.title,
+    start: combineDateTime(draft.date, draft.startTime),
+    end: combineDateTime(draft.date, draft.endTime),
     allDay: false,
   };
 }
 
 /**
- * Carries a "create" popup session's clicked date/hour (and, now that "More
- * options" has been clicked, the task list) forward into `TaskEditor`'s
- * `initial` shape. Mirrors `QuickCreatePopup`'s own Task defaulting rule: a
- * specific hour (Day/Week slot click) seeds a due time there; no hour (a
- * Month/Agenda day-box click) leaves `dueTime: null` — "no time set" — since
- * Tasks, unlike Events, don't always get a time.
+ * The Task-side counterpart of `draftToEventEditorInitial`. An empty
+ * `draft.dueTime` stays "no time set" (`null`) rather than becoming `""` —
+ * the shape `TaskActionInput` documents and `TaskEditor` seeds its blank time
+ * input from.
  */
-function createPopupToTaskEditorInitial(
-  popup: { date: Date; hour?: number },
-  taskListId: string,
+function draftToTaskEditorInitial(
+  draft: QuickCreateDraft,
 ): Partial<TaskActionInput> & { taskListId: string } {
-  const dateStr = formatDateInput(popup.date);
-
   return {
-    taskListId,
-    dueDate: dateStr,
-    dueTime: popup.hour != null ? `${String(popup.hour).padStart(2, "0")}:00` : null,
+    taskListId: draft.taskListId,
+    title: draft.title,
+    dueDate: draft.date,
+    dueTime: draft.dueTime || null,
   };
 }
 
@@ -145,79 +140,107 @@ function createPopupToTaskEditorInitial(
  * once, after its children, so it's always the single surface controlled by
  * `useCalendarInteraction()`.
  *
- * `expanded` tracks whether the quick-create popup's "More options" link has
- * been clicked for the *current* `"create"` session — it resets to `false`
- * every time `popup` itself changes (a fresh create/edit session always
- * starts back at the quick popup, never stuck mid-expansion from a previous
- * one). `"edit-event"` always renders the full `EventEditor` directly, no
+ * Everything it renders goes inside a `ModalShell` — a fixed, centered card
+ * over a backdrop, with Escape/backdrop-click dismissal and focus moved into
+ * the card. None of the three surfaces positions itself; they're all plain
+ * in-flow cards that the shell lifts out of the document flow.
+ *
+ * `draft` holds the quick-create popup's in-progress form state once "More
+ * options" has been clicked for the *current* `"create"` session, which both
+ * selects the full editor and pre-fills it (see `draftToEventEditorInitial`).
+ * `null` means "still on the quick popup". It resets every time `popup`
+ * itself changes, so a fresh session always starts back at the quick popup
+ * rather than stuck mid-expansion with a previous session's draft.
+ *
+ * `"edit-event"`/`"edit-task"` always render the full editor directly, no
  * quick-popup step, per the design doc ("Clicking an existing event or task
- * opens the identical popup/editor"). `"edit-task"` renders the full
- * `TaskEditor` directly for the same reason.
+ * opens the identical popup/editor").
+ *
+ * ## Why `key={...sessionId}` and not another render-time reset
+ *
+ * Every editor seeds its fields with `useState(initial.x ?? ...)`, which only
+ * runs on mount. When `popup` goes directly from one open session to another
+ * — clicking event A's chip, then event B's, with no close in between —
+ * React would otherwise reuse the *same* component instance at the same
+ * render position: the form keeps showing A's values while `initial.eventId`
+ * is already B's, and saving PATCHes A's displayed data onto B's real Google
+ * event. The `prevPopup` render-time reset below can fix a local boolean like
+ * `draft`, but it can't reach inside a child's own `useState` seeds — only
+ * unmounting and remounting the child does that, which is what a changing
+ * `key` forces.
+ *
+ * The key has to carry `sessionId` rather than anything derived from `popup`,
+ * because two indistinguishable opens are still two sessions (two `N`
+ * presses; reopening the same event after typing into it and closing).
  */
 export function EventTaskModal(props: {
   popup: PopupState;
+  sessionId: number;
   calendars: GoogleCalendarListEntry[];
   taskLists: GoogleTaskList[];
   onClose(): void;
 }) {
-  const { popup, calendars, taskLists, onClose } = props;
-  const [expanded, setExpanded] = useState(false);
+  const { popup, sessionId, calendars, taskLists, onClose } = props;
+  const [draft, setDraft] = useState<QuickCreateDraft | null>(null);
 
-  // Resets `expanded` to `false` whenever `popup` itself changes (a fresh
-  // create/edit session always starts back at the quick popup, never stuck
-  // mid-expansion from a previous one) — adjusting state during render
-  // rather than in a `useEffect`, React's documented pattern for resetting
-  // state in response to a prop change without an extra render pass.
+  // Resets `draft` whenever `popup` itself changes (a fresh create/edit
+  // session always starts back at the quick popup) — adjusting state during
+  // render rather than in a `useEffect`, React's documented pattern for
+  // resetting state in response to a prop change without an extra render pass.
   const [prevPopup, setPrevPopup] = useState(popup);
   if (popup !== prevPopup) {
     setPrevPopup(popup);
-    setExpanded(false);
+    setDraft(null);
   }
 
-  if (popup.mode === "create" && popup.kind === "event" && expanded) {
-    const defaultCalendarId = calendars.find((calendar) => calendar.primary)?.id ?? calendars[0]?.id ?? "";
-    return (
+  if (popup.mode === "closed") {
+    return null;
+  }
+
+  const sessionKey = `${popup.mode}-${sessionId}`;
+
+  let body: ReactNode = null;
+
+  if (popup.mode === "create" && draft?.kind === "event") {
+    body = (
       <EventEditor
+        key={`${sessionKey}-event-editor`}
         mode="create"
-        initial={createPopupToEditorInitial(popup, defaultCalendarId)}
+        initial={draftToEventEditorInitial(draft)}
         calendars={calendars}
         onSaved={onClose}
         onDeleted={onClose}
         onCancel={onClose}
       />
     );
-  }
-
-  if (popup.mode === "create" && popup.kind === "task" && expanded) {
-    const defaultTaskListId = taskLists[0]?.id ?? "";
-    return (
+  } else if (popup.mode === "create" && draft?.kind === "task") {
+    body = (
       <TaskEditor
+        key={`${sessionKey}-task-editor`}
         mode="create"
-        initial={createPopupToTaskEditorInitial(popup, defaultTaskListId)}
+        initial={draftToTaskEditorInitial(draft)}
         taskLists={taskLists}
         onSaved={onClose}
         onDeleted={onClose}
         onCancel={onClose}
       />
     );
-  }
-
-  if (popup.mode === "create") {
-    return (
+  } else if (popup.mode === "create") {
+    body = (
       <QuickCreatePopup
+        key={`${sessionKey}-quick`}
         calendars={calendars}
         taskLists={taskLists}
         initial={{ kind: popup.kind, date: popup.date, hour: popup.hour }}
-        onMoreOptions={() => setExpanded(true)}
+        onMoreOptions={setDraft}
         onSaved={onClose}
         onCancel={onClose}
       />
     );
-  }
-
-  if (popup.mode === "edit-event") {
-    return (
+  } else if (popup.mode === "edit-event") {
+    body = (
       <EventEditor
+        key={sessionKey}
         mode="edit"
         initial={googleEventToEditorInitial(popup.event)}
         calendars={calendars}
@@ -226,11 +249,10 @@ export function EventTaskModal(props: {
         onCancel={onClose}
       />
     );
-  }
-
-  if (popup.mode === "edit-task") {
-    return (
+  } else if (popup.mode === "edit-task") {
+    body = (
       <TaskEditor
+        key={sessionKey}
         mode="edit"
         initial={calendarTaskToEditorInitial(popup.task)}
         taskLists={taskLists}
@@ -241,5 +263,5 @@ export function EventTaskModal(props: {
     );
   }
 
-  return null;
+  return <ModalShell onClose={onClose}>{body}</ModalShell>;
 }

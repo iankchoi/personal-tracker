@@ -28,6 +28,21 @@ export type PopupState =
 
 type CalendarInteractionContextValue = {
   popup: PopupState;
+  /**
+   * A monotonic counter bumped by every `openCreate`/`openEditEvent`/
+   * `openEditTask` call — one "session" of the popup being open, from that
+   * call until the next one. `EventTaskModal` keys its child on this, which is
+   * what forces a genuinely fresh component instance per session.
+   *
+   * It has to be a counter rather than something derived from `popup` itself,
+   * because two *indistinguishable* opens are still two sessions: pressing
+   * `N` twice in a row, or clicking the same event's edit twice, produces
+   * `PopupState` values that compare equal field-for-field, yet the second one
+   * must still reset the form. Deriving a key from the event/task id would
+   * also reuse the mounted instance when reopening the *same* event after
+   * typing into it and closing without saving.
+   */
+  sessionId: number;
   openCreate(kind: "event" | "task", date: Date, hour?: number): void;
   openEditEvent(event: GoogleCalendarEvent): void;
   openEditTask(task: CalendarTaskItem): void;
@@ -68,7 +83,14 @@ export function CalendarInteractionProvider(props: {
   taskLists: GoogleTaskList[];
   children: ReactNode;
 }) {
-  const [popup, setPopup] = useState<PopupState>({ mode: "closed" });
+  // `popup` and `sessionId` live in one state object so they can never be
+  // observed out of step — a render that already shows event B's `popup` but
+  // still carries session A's id would hand `EventTaskModal` the stale key
+  // that Fix 2 exists to prevent.
+  const [{ popup, sessionId }, setSession] = useState<{ popup: PopupState; sessionId: number }>({
+    popup: { mode: "closed" },
+    sessionId: 0,
+  });
 
   const writableCalendars = useMemo(
     () => filterWritableCalendars(props.calendars),
@@ -76,24 +98,35 @@ export function CalendarInteractionProvider(props: {
   );
 
   const openCreate = useCallback((kind: "event" | "task", date: Date, hour?: number) => {
-    setPopup({ mode: "create", kind, date, hour });
+    setSession((current) => ({
+      popup: { mode: "create", kind, date, hour },
+      sessionId: current.sessionId + 1,
+    }));
   }, []);
 
   const openEditEvent = useCallback((event: GoogleCalendarEvent) => {
-    setPopup({ mode: "edit-event", event });
+    setSession((current) => ({
+      popup: { mode: "edit-event", event },
+      sessionId: current.sessionId + 1,
+    }));
   }, []);
 
   const openEditTask = useCallback((task: CalendarTaskItem) => {
-    setPopup({ mode: "edit-task", task });
+    setSession((current) => ({
+      popup: { mode: "edit-task", task },
+      sessionId: current.sessionId + 1,
+    }));
   }, []);
 
+  // Closing ends the current session without starting a new one, so the
+  // counter deliberately stays put here — the *next* open bumps it.
   const close = useCallback(() => {
-    setPopup({ mode: "closed" });
+    setSession((current) => ({ popup: { mode: "closed" }, sessionId: current.sessionId }));
   }, []);
 
   const value = useMemo(
-    () => ({ popup, openCreate, openEditEvent, openEditTask, close }),
-    [popup, openCreate, openEditEvent, openEditTask, close],
+    () => ({ popup, sessionId, openCreate, openEditEvent, openEditTask, close }),
+    [popup, sessionId, openCreate, openEditEvent, openEditTask, close],
   );
 
   return (
@@ -101,6 +134,7 @@ export function CalendarInteractionProvider(props: {
       {props.children}
       <EventTaskModal
         popup={popup}
+        sessionId={sessionId}
         calendars={writableCalendars}
         taskLists={props.taskLists}
         onClose={close}

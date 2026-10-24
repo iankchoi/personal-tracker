@@ -1,9 +1,11 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { createEventAction, deleteEventAction, updateEventAction, type EventActionInput } from "../../lib/actions/calendar-events";
 import type { CalendarColorToken } from "../../lib/calendar-colors";
+import { allDayEndToExclusive } from "../../lib/calendar-dates";
 import type { GoogleCalendarListEntry } from "../../lib/google-calendar";
 
 import { ColorPicker } from "./ColorPicker";
@@ -147,6 +149,7 @@ export function EventEditor(props: {
   onCancel(): void;
 }) {
   const { mode, initial, calendars, onSaved, onDeleted, onCancel } = props;
+  const router = useRouter();
 
   const fallback = defaultWhen();
   const start = splitDateTime(initial.start, initial.allDay ?? false, {
@@ -172,25 +175,36 @@ export function EventEditor(props: {
   const [meetTouched, setMeetTouched] = useState(false);
   const [description, setDescription] = useState(initial.description ?? "");
   const [guestEmails, setGuestEmails] = useState<string[]>(initial.guestEmails ?? []);
+  const [guestsTouched, setGuestsTouched] = useState(false);
   const [guestInput, setGuestInput] = useState("");
   const [guestsCanModify, setGuestsCanModify] = useState(initial.guestsCanModify ?? false);
   const [guestsCanInviteOthers, setGuestsCanInviteOthers] = useState(initial.guestsCanInviteOthers ?? true);
   const [guestsCanSeeOtherGuests, setGuestsCanSeeOtherGuests] = useState(initial.guestsCanSeeOtherGuests ?? true);
   const [colorToken, setColorToken] = useState<CalendarColorToken | null>(initial.colorToken ?? null);
+  const [colorTouched, setColorTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * A title made only of whitespace is as useless as an empty one, and saving
+   * either over an existing event blanks its real name in Google Calendar
+   * (and on every device synced to it) with no way to get it back from here.
+   */
+  const titleIsEmpty = title.trim() === "";
 
   function addGuest() {
     const email = guestInput.trim();
     if (email && !guestEmails.includes(email)) {
       setGuestEmails([...guestEmails, email]);
+      setGuestsTouched(true);
     }
     setGuestInput("");
   }
 
   function removeGuest(email: string) {
     setGuestEmails(guestEmails.filter((existing) => existing !== email));
+    setGuestsTouched(true);
   }
 
   function handleGuestKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
@@ -204,7 +218,7 @@ export function EventEditor(props: {
     setSaving(true);
     setError(null);
     try {
-      // Meet and Notify are the two fields where "the value this session
+      // Meet, Notify, Color and Guests are the four fields where "the value this session
       // happens to be seeded/defaulted to" and "the user actually asked for
       // this" are different things, and conflating them would silently
       // mutate real Google Calendar data on an edit that never touched
@@ -220,6 +234,18 @@ export function EventEditor(props: {
       //   way to tell "the user wants 30" apart from "this just defaulted to
       //   30" — sent on every save, it would force a 30-minute override
       //   onto any event that never had one.
+      // - `colorToken` is seeded via `tokenForColorId`, which returns `null`
+      //   for the 5 of Google's 11 colorIds this app's 6-token palette
+      //   doesn't map. On an update, `colorToken: null` means "explicitly
+      //   clear the override" (see Part 1's `buildEventPayload`) — so
+      //   resending it would wipe the real color off any event the user had
+      //   painted Lavender/Sage/etc. in Google Calendar, just for renaming
+      //   it. (Accurately *showing* such an unmapped color in the picker is a
+      //   separate, harder problem and deliberately not solved here.)
+      // - `guestEmails` is seeded from the event's real attendee list with no
+      //   `responseStatus`, so resending it resets every already-accepted
+      //   guest to `needsAction` *and* makes Google re-send its invite email
+      //   to the whole list — on every unrelated save.
       // On `"edit"`, an untouched field sends `undefined` instead of its
       // current displayed value — Part 1's update semantics treat `undefined`
       // as "don't mention this field at all" (left alone), which is exactly
@@ -227,19 +253,31 @@ export function EventEditor(props: {
       // back to its original state, or typing then retyping the same
       // number) sends the real explicit value, including `false` for Meet.
       // On `"create"` there's nothing pre-existing to accidentally clobber,
-      // so both are always sent explicitly regardless of touched state.
+      // so all four are always sent explicitly regardless of touched state.
+      //
+      // `description`/`location` run the *opposite* way: `field || undefined`
+      // drops the key from the JSON body entirely, which on a PATCH tells
+      // Google "leave it alone" — so clearing an event's description to empty
+      // and saving silently kept the old text. In `"edit"` mode the current
+      // string is therefore always sent as-is, `""` included (Google reads an
+      // empty string as an explicit clear); `"create"` keeps the omit-if-empty
+      // shape, since there's nothing to clear on a brand-new event.
+      //
+      // All-day `end` converts from the inclusive last-day the user sees back
+      // to Google's exclusive `end.date` (see `allDayEndToExclusive`) — the
+      // mirror of the `-1` day `EventTaskModal` applied when loading it.
       const input: EventActionInput = {
         calendarId,
         title,
         start: allDay ? startDate : combineDateTime(startDate, startTime),
-        end: allDay ? endDate : combineDateTime(endDate, endTime),
+        end: allDay ? allDayEndToExclusive(endDate) : combineDateTime(endDate, endTime),
         allDay,
-        description: description || undefined,
-        location: location || undefined,
-        colorToken,
+        description: mode === "edit" ? description : description || undefined,
+        location: mode === "edit" ? location : location || undefined,
+        colorToken: mode === "create" || colorTouched ? colorToken : undefined,
         notifyMinutesBefore: mode === "create" || notifyTouched ? notifyMinutesBefore : undefined,
         addGoogleMeet: mode === "create" || meetTouched ? addGoogleMeet : undefined,
-        guestEmails,
+        guestEmails: mode === "create" || guestsTouched ? guestEmails : undefined,
         guestsCanModify,
         guestsCanInviteOthers,
         guestsCanSeeOtherGuests,
@@ -250,6 +288,11 @@ export function EventEditor(props: {
       } else {
         await updateEventAction({ ...input, eventId: initial.eventId! });
       }
+      // The calendar grid is server-rendered straight from Google, so without
+      // a revalidation the popup closes onto visibly stale data until the user
+      // reloads by hand — same `router.refresh()` pattern `TaskCheckbox` uses
+      // after `completeTaskAction`.
+      router.refresh();
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -266,6 +309,7 @@ export function EventEditor(props: {
     setError(null);
     try {
       await deleteEventAction({ calendarId, eventId: initial.eventId });
+      router.refresh();
       onDeleted();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -329,7 +373,18 @@ export function EventEditor(props: {
 
       <div className="ee-row">
         <span className="ee-icon">{CalendarIcon}</span>
-        <select aria-label="Calendar" value={calendarId} onChange={(event) => setCalendarId(event.target.value)}>
+        {/* Moving an event between calendars needs Google's separate
+            `events.move` endpoint, which this codebase doesn't have yet;
+            `updateEventAction` PATCHes `calendarId/events/eventId`, so picking
+            a different calendar mid-edit would send the old event's id to the
+            new calendar and 404. Disabled while editing, fully live on create. */}
+        <select
+          aria-label="Calendar"
+          value={calendarId}
+          disabled={mode === "edit"}
+          title={mode === "edit" ? "An event can't be moved to another calendar here" : undefined}
+          onChange={(event) => setCalendarId(event.target.value)}
+        >
           {calendars.map((calendar) => (
             <option key={calendar.id} value={calendar.id}>
               {calendar.summary}
@@ -453,7 +508,16 @@ export function EventEditor(props: {
 
       <div className="ee-row">
         <span className="ee-icon">{ColorRingIcon}</span>
-        <ColorPicker value={colorToken} onChange={setColorToken} />
+        {/* `ColorPicker` stays a dumb controlled component — the touched flag
+            is set here, at the one place that knows a *user* chose a color
+            rather than the field merely having been seeded from the event. */}
+        <ColorPicker
+          value={colorToken}
+          onChange={(token) => {
+            setColorToken(token);
+            setColorTouched(true);
+          }}
+        />
       </div>
 
       <div className="ee-actions">
@@ -466,7 +530,13 @@ export function EventEditor(props: {
         <button type="button" className="ee-cancel" onClick={onCancel}>
           Cancel
         </button>
-        <button type="button" className="ee-save" onClick={handleSave} disabled={saving}>
+        <button
+          type="button"
+          className="ee-save"
+          onClick={handleSave}
+          disabled={saving || titleIsEmpty}
+          title={titleIsEmpty ? "Add a title first" : undefined}
+        >
           Save
         </button>
       </div>

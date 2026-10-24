@@ -1,3 +1,5 @@
+"use client";
+
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   MONTH_NAMES_FULL,
@@ -16,6 +18,7 @@ import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import { CalendarsLegend } from "./CalendarsLegend";
+import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { MiniMonth } from "./MiniMonth";
 import { TaskCheckbox } from "./TaskCheckbox";
 
@@ -118,6 +121,7 @@ export function AgendaView({
   tasks?: CalendarTaskItem[];
   taskLists?: GoogleTaskList[];
 }) {
+  const { openEditEvent, openEditTask } = useCalendarInteraction();
   const { start, end } = getViewRange("agenda", referenceDate);
   const days = Array.from({ length: AGENDA_WINDOW_DAYS }, (_, index) => addDays(start, index));
   const calendarNameById = new Map(calendars.map((calendar) => [calendar.id, calendar.summary]));
@@ -145,7 +149,7 @@ export function AgendaView({
                   const calendarName = calendarNameById.get(event.calendarId) ?? "";
 
                   return (
-                    <div className="rowcard" key={event.id}>
+                    <div className="rowcard" key={event.id} onClick={() => openEditEvent(event)}>
                       <span className="time">{timeLabel}</span>
                       <span className="title">{event.summary}</span>
                       <span className={`src ${colorToken}`}>{calendarName}</span>
@@ -153,7 +157,7 @@ export function AgendaView({
                   );
                 })}
                 {dayTasks.map((task) => (
-                  <TaskCheckbox key={task.id} task={task} />
+                  <TaskCheckbox key={task.id} task={task} onTitleClick={openEditTask} />
                 ))}
               </div>
             </div>

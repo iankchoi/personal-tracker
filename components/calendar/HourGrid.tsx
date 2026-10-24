@@ -1,3 +1,5 @@
+"use client";
+
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
@@ -18,6 +20,7 @@ import { layoutColumns, type ColumnedGridItem, type PositionedGridItem } from "@
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 
+import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
 
 /** The fixed set of hour rows shown on the grid, e.g. [7, 8, ..., 21] for the default 7 AM–10 PM window. */
@@ -150,6 +153,7 @@ export function HourGrid({
 }) {
   const gridClassName = days.length === 1 ? "day-grid" : "week-grid";
   const now = new Date();
+  const { openCreate, openEditEvent, openEditTask } = useCalendarInteraction();
 
   return (
     <div className={gridClassName}>
@@ -171,13 +175,13 @@ export function HourGrid({
           {getAllDayEvents(events, day).map((event) => {
             const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
             return (
-              <span key={event.id} className={`wg-chip ${colorToken}`}>
+              <span key={event.id} className={`wg-chip ${colorToken}`} onClick={() => openEditEvent(event)}>
                 {event.summary}
               </span>
             );
           })}
           {getAllDayTasks(tasks, day).map((task) => (
-            <TaskCheckbox key={task.id} task={task} />
+            <TaskCheckbox key={task.id} task={task} onTitleClick={openEditTask} />
           ))}
         </div>
       ))}
@@ -198,7 +202,7 @@ export function HourGrid({
         return (
           <div key={day.getTime()} className="wg-col" style={{ gridColumn: index + 2 }}>
             {GRID_HOURS.map((hour) => (
-              <div key={hour} className="wg-line" />
+              <div key={hour} className="wg-line" onClick={() => openCreate("event", day, hour)} />
             ))}
 
             {/* Events and timed tasks come out of one combined layout pass,
@@ -211,7 +215,7 @@ export function HourGrid({
               if (block.kind === "task") {
                 return (
                   <div key={`task-${block.item.id}`} className="wg-event wg-task" style={blockStyle}>
-                    <TaskCheckbox task={block.item} />
+                    <TaskCheckbox task={block.item} onTitleClick={openEditTask} />
                   </div>
                 );
               }
@@ -219,7 +223,12 @@ export function HourGrid({
               const event = block.item;
               const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
               return (
-                <div key={`event-${event.id}`} className={`wg-event ${colorToken}`} style={blockStyle}>
+                <div
+                  key={`event-${event.id}`}
+                  className={`wg-event ${colorToken}`}
+                  style={blockStyle}
+                  onClick={() => openEditEvent(event)}
+                >
                   <span className="et">{event.summary}</span>
                   {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
                   <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>

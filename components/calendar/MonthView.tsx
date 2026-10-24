@@ -1,3 +1,5 @@
+"use client";
+
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
@@ -13,6 +15,7 @@ import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
+import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
 
 /** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. Tasks count as chips too. */
@@ -88,6 +91,7 @@ export function MonthView({
   taskLists?: GoogleTaskList[];
 }) {
   const weeks = buildWeeks(referenceDate);
+  const { openCreate, openEditEvent, openEditTask } = useCalendarInteraction();
 
   return (
     <div className="month-grid">
@@ -116,17 +120,25 @@ export function MonthView({
               if (isSameLocalDay(day, today)) classes.push("today");
 
               return (
-                <div className={classes.join(" ")} key={day.getTime()}>
+                <div className={classes.join(" ")} key={day.getTime()} onClick={() => openCreate("event", day)}>
                   <span className="mg-date">{day.getDate()}</span>
                   {entries.length > 0 && (
-                    <div className="mg-events">
+                    // `stopPropagation` keeps a chip/task click from also
+                    // bubbling up into the cell's own click-to-create
+                    // handler above — the brief's "onClick on the cell
+                    // background (not on its chips)".
+                    <div className="mg-events" onClick={(event) => event.stopPropagation()}>
                       {visibleEntries.map((entry) => {
                         if (entry.kind === "task") {
-                          return <TaskCheckbox key={entry.task.id} task={entry.task} />;
+                          return <TaskCheckbox key={entry.task.id} task={entry.task} onTitleClick={openEditTask} />;
                         }
                         const colorToken = colorByCalendar[entry.event.calendarId] ?? FALLBACK_COLOR_TOKEN;
                         return (
-                          <span key={entry.event.id} className={`mg-chip ${colorToken}`}>
+                          <span
+                            key={entry.event.id}
+                            className={`mg-chip ${colorToken}`}
+                            onClick={() => openEditEvent(entry.event)}
+                          >
                             {entry.event.summary}
                           </span>
                         );

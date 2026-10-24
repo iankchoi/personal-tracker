@@ -107,11 +107,22 @@ export default async function CalendarPage({
   // /sign-in before this page renders, so `session` is guaranteed non-null.
   const session = await auth();
 
+  // `CalendarToolbar` now reads `openCreate` from `useCalendarInteraction()`
+  // (Part 2's "+ New event" wiring), so every path that renders it — not
+  // just the happy path below — needs a `CalendarInteractionProvider`
+  // ancestor, or the hook's deliberate "throw if no provider" (see
+  // CalendarInteractionProvider.tsx) would crash this degraded state instead
+  // of just showing the reconnect banner. No calendars/task lists have been
+  // fetched yet at this point, so the provider gets empty lists here — the
+  // "+ New event" button's popup would have nothing to pick from, but that's
+  // consistent with there being no usable calendar connection yet.
   const reconnectPage = (
-    <div className="cal-col">
-      <CalendarToolbar view={view} date={date} />
-      <ReconnectBanner />
-    </div>
+    <CalendarInteractionProvider calendars={[]} taskLists={[]}>
+      <div className="cal-col">
+        <CalendarToolbar view={view} date={date} />
+        <ReconnectBanner />
+      </div>
+    </CalendarInteractionProvider>
   );
 
   // The session already carries the answer when a refresh has previously
@@ -200,17 +211,24 @@ export default async function CalendarPage({
   } catch (error) {
     console.error("Failed to load calendar data:", error);
 
+    // Same reasoning as `reconnectPage` above: `CalendarToolbar` needs a
+    // `CalendarInteractionProvider` ancestor wherever it renders. The fetch
+    // that failed may have failed before `calendars`/`taskLists` were ever
+    // assigned, so empty lists are used here too rather than the
+    // possibly-unset local variables.
     return (
-      <div className="cal-col">
-        <CalendarToolbar view={view} date={date} />
-        <div className="error-block">
-          <span className="error-dot" />
-          <span>Couldn&apos;t load your calendar.</span>
-          <a className="error-retry" href={`/calendar?view=${view}&date=${formatDateParam(date)}`}>
-            Retry
-          </a>
+      <CalendarInteractionProvider calendars={[]} taskLists={[]}>
+        <div className="cal-col">
+          <CalendarToolbar view={view} date={date} />
+          <div className="error-block">
+            <span className="error-dot" />
+            <span>Couldn&apos;t load your calendar.</span>
+            <a className="error-retry" href={`/calendar?view=${view}&date=${formatDateParam(date)}`}>
+              Retry
+            </a>
+          </div>
         </div>
-      </div>
+      </CalendarInteractionProvider>
     );
   }
 

@@ -8,15 +8,31 @@ import { Loader } from "@googlemaps/js-api-loader";
  * Minimal, locally-declared shape of the pieces of the Places (New)
  * JavaScript API this component actually touches. Deliberately not using
  * `@types/google.maps` — it isn't installed in this project, and pulling in
- * the full `google.maps.*` ambient namespace just to describe three fields
+ * the full `google.maps.*` ambient namespace just to describe a few fields
  * would be scope creep for what this component needs.
+ *
+ * Per Google's current Places (New) docs, selecting a suggestion from a
+ * `PlaceAutocompleteElement` fires `gmp-select` with an `event.placePrediction`
+ * — a lightweight prediction, not a full place. Getting the formatted
+ * address is a two-step async operation: `placePrediction.toPlace()` returns
+ * a `Place` with no fields populated yet, and `place.fetchFields({ fields:
+ * [...] })` must resolve before `place.formattedAddress` is readable.
  */
+type PlaceLike = {
+  formattedAddress?: string | null;
+  fetchFields(options: { fields: string[] }): Promise<unknown>;
+};
+
+type PlacePredictionLike = {
+  toPlace(): PlaceLike;
+};
+
 type PlaceAutocompleteSelectEvent = Event & {
-  place?: { formattedAddress?: string | null };
+  placePrediction?: PlacePredictionLike;
 };
 
 type PlaceAutocompleteElementLike = HTMLElement & {
-  addEventListener(type: "gmp-placeselect", listener: (event: PlaceAutocompleteSelectEvent) => void): void;
+  addEventListener(type: "gmp-select", listener: (event: PlaceAutocompleteSelectEvent) => void): void;
 };
 
 type PlacesLibraryLike = {
@@ -41,9 +57,14 @@ type LoaderLike = {
  * library via `@googlemaps/js-api-loader` and, if that succeeds, mounts a
  * `google.maps.places.PlaceAutocompleteElement` as an overlay positioned
  * exactly over the plain input (rather than replacing/unmounting it), so
- * the plain input remains in the DOM and functional throughout — selecting
- * a suggestion from the overlay calls `onChange` with the resolved
- * `formattedAddress`, same as typing directly into the plain input would.
+ * the plain input remains in the DOM and functional throughout. Selecting
+ * a suggestion from the overlay fires `gmp-select`, which only carries a
+ * lightweight prediction — resolving it to a `formattedAddress` is a
+ * second async `fetchFields()` call, which can itself fail; that failure
+ * is caught the same way a script-load failure is, so it never throws and
+ * never disables the plain input. Once it resolves, `onChange` is called
+ * with the resolved `formattedAddress`, same as typing directly into the
+ * plain input would.
  */
 export function LocationAutocomplete(props: { value: string; onChange(address: string): void }) {
   const { value, onChange } = props;
@@ -112,11 +133,28 @@ export function LocationAutocomplete(props: { value: string; onChange(address: s
           return;
         }
         const autocompleteElement = new places.PlaceAutocompleteElement();
-        autocompleteElement.addEventListener("gmp-placeselect", (event) => {
-          const formattedAddress = event.place?.formattedAddress;
-          if (formattedAddress) {
-            updateText(formattedAddress);
+        autocompleteElement.addEventListener("gmp-select", (event) => {
+          const placePrediction = event.placePrediction;
+          if (!placePrediction) {
+            return;
           }
+          const place = placePrediction.toPlace();
+          place
+            .fetchFields({ fields: ["formattedAddress"] })
+            .then(() => {
+              if (place.formattedAddress) {
+                updateText(place.formattedAddress);
+              }
+            })
+            .catch((error: unknown) => {
+              // Resolving the selected suggestion's address failed (network
+              // issue, etc.) — log and leave the plain input exactly as it
+              // was. Never throw, never disable the field.
+              console.error(
+                "Google Places fetchFields failed; the location field remains a plain text input.",
+                error,
+              );
+            });
         });
         overlayRef.current.appendChild(autocompleteElement);
         setHasWidget(true);

@@ -56,9 +56,13 @@ test("the input still works if the Places script fails to load (e.g. loader.impo
   expect(onChange).toHaveBeenLastCalledWith("123 Main St");
 });
 
-test("selecting a Places autocomplete suggestion calls onChange with the resolved formatted address", async () => {
-  vi.stubEnv("NEXT_PUBLIC_GOOGLE_PLACES_API_KEY", "test-key");
-
+/**
+ * Mounts `LocationAutocomplete` with the Places library resolving to a
+ * single mocked `PlaceAutocompleteElement`, and returns that created DOM
+ * element (once it exists) so a test can dispatch a `gmp-select` event on
+ * it directly.
+ */
+async function renderWithMockedPlacesWidget(onChange: (address: string) => void) {
   let createdElement: HTMLElement | undefined;
   function MockPlaceAutocompleteElement() {
     const element = document.createElement("div");
@@ -70,16 +74,65 @@ test("selecting a Places autocomplete suggestion calls onChange with the resolve
     PlaceAutocompleteElement: MockPlaceAutocompleteElement,
   });
 
-  const onChange = vi.fn();
   render(<LocationAutocomplete value="" onChange={onChange} />);
 
   await waitFor(() => expect(createdElement).toBeDefined());
+  return createdElement!;
+}
 
-  const selectEvent = new Event("gmp-placeselect") as Event & {
-    place?: { formattedAddress?: string };
+/**
+ * Builds a `gmp-select` event carrying a `placePrediction.toPlace()` whose
+ * `fetchFields()` resolves/rejects per `place.fetchFields` — matching
+ * Google's current Places (New) contract: the event itself only carries a
+ * lightweight prediction, and resolving it to a real `formattedAddress` is
+ * a second, separately-awaited `fetchFields()` call.
+ */
+function gmpSelectEvent(place: { formattedAddress?: string; fetchFields(): Promise<unknown> }) {
+  const event = new Event("gmp-select") as Event & {
+    placePrediction?: { toPlace(): typeof place };
   };
-  selectEvent.place = { formattedAddress: "1 Infinite Loop, Cupertino, CA" };
-  createdElement!.dispatchEvent(selectEvent);
+  event.placePrediction = { toPlace: () => place };
+  return event;
+}
 
-  expect(onChange).toHaveBeenLastCalledWith("1 Infinite Loop, Cupertino, CA");
+test("selecting a Places autocomplete suggestion calls onChange with the resolved formatted address", async () => {
+  vi.stubEnv("NEXT_PUBLIC_GOOGLE_PLACES_API_KEY", "test-key");
+
+  const onChange = vi.fn();
+  const createdElement = await renderWithMockedPlacesWidget(onChange);
+
+  const place = {
+    formattedAddress: "1 Infinite Loop, Cupertino, CA",
+    fetchFields: vi.fn().mockResolvedValue(undefined),
+  };
+  createdElement.dispatchEvent(gmpSelectEvent(place));
+
+  await waitFor(() => expect(onChange).toHaveBeenLastCalledWith("1 Infinite Loop, Cupertino, CA"));
+  expect(place.fetchFields).toHaveBeenCalledWith({ fields: ["formattedAddress"] });
+});
+
+test("the input still works if fetchFields() rejects after selecting a suggestion", async () => {
+  vi.stubEnv("NEXT_PUBLIC_GOOGLE_PLACES_API_KEY", "test-key");
+
+  const onChange = vi.fn();
+  const createdElement = await renderWithMockedPlacesWidget(onChange);
+
+  const place = {
+    formattedAddress: "1 Infinite Loop, Cupertino, CA",
+    fetchFields: vi.fn().mockRejectedValue(new Error("network blocked")),
+  };
+  createdElement.dispatchEvent(gmpSelectEvent(place));
+
+  // Let the rejected promise settle (caught internally) before asserting
+  // nothing broke.
+  await waitFor(() => expect(place.fetchFields).toHaveBeenCalled());
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(screen.getByRole("textbox")).toBeInTheDocument();
+  expect(screen.getByRole("textbox")).not.toBeDisabled();
+  expect(onChange).not.toHaveBeenCalled();
+
+  await userEvent.type(screen.getByRole("textbox"), "456 Side St");
+  expect(onChange).toHaveBeenLastCalledWith("456 Side St");
 });

@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 
 import { auth } from "../../../auth";
+import { CalendarInteractionProvider } from "../../../components/calendar/CalendarInteractionProvider";
 import { CalendarToolbar } from "../../../components/calendar/CalendarToolbar";
 import { ReconnectBanner } from "../../../components/calendar/ReconnectBanner";
 import { AgendaView } from "../../../components/calendar/AgendaView";
@@ -220,57 +221,59 @@ export default async function CalendarPage({
   // it renders its own `.empty-block` internally when it has nothing to show
   // (see AgendaView.tsx).
   return (
-    <div className="cal-col">
-      <CalendarToolbar view={view} date={date} />
-      {view === "week" && (
-        <WeekView
-          referenceDate={date}
-          events={allEvents}
-          colorByCalendar={colorByCalendar}
-          tasks={allTasks}
-          taskLists={taskLists}
-        />
-      )}
-      {view === "day" && (
-        <DayView
-          referenceDate={date}
-          events={allEvents}
-          calendars={calendars}
-          colorByCalendar={colorByCalendar}
-          // "Up next" means days strictly after the viewed day, decided by
-          // each event's own wall-clock day (`eventStartDay`) rather than by
-          // re-reading its instant in the server's timezone — otherwise a
-          // late-evening event would jump a day under a mismatched `TZ`.
-          // Ordering still uses the absolute instant, which is
-          // timezone-independent.
-          upcoming={allEvents
-            .filter((event) => eventStartDay(event).getTime() >= addDays(date, 1).getTime())
-            .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime())}
-          tasks={allTasks}
-          taskLists={taskLists}
-        />
-      )}
-      {view === "month" && (
-        <MonthView
-          referenceDate={date}
-          events={allEvents}
-          colorByCalendar={colorByCalendar}
-          today={new Date()}
-          tasks={allTasks}
-          taskLists={taskLists}
-        />
-      )}
-      {view === "agenda" && (
-        <AgendaView
-          referenceDate={date}
-          events={allEvents}
-          calendars={calendars}
-          colorByCalendar={colorByCalendar}
-          today={new Date()}
-          tasks={allTasks}
-          taskLists={taskLists}
-        />
-      )}
-    </div>
+    <CalendarInteractionProvider calendars={calendars} taskLists={taskLists}>
+      <div className="cal-col">
+        <CalendarToolbar view={view} date={date} />
+        {view === "week" && (
+          <WeekView
+            referenceDate={date}
+            events={allEvents}
+            colorByCalendar={colorByCalendar}
+            tasks={allTasks}
+            taskLists={taskLists}
+          />
+        )}
+        {view === "day" && (
+          <DayView
+            referenceDate={date}
+            events={allEvents}
+            calendars={calendars}
+            colorByCalendar={colorByCalendar}
+            // "Up next" means days strictly after the viewed day, decided by
+            // each event's own wall-clock day (`eventStartDay`) rather than by
+            // re-reading its instant in the server's timezone — otherwise a
+            // late-evening event would jump a day under a mismatched `TZ`.
+            // Ordering still uses the absolute instant, which is
+            // timezone-independent.
+            upcoming={allEvents
+              .filter((event) => eventStartDay(event).getTime() >= addDays(date, 1).getTime())
+              .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime())}
+            tasks={allTasks}
+            taskLists={taskLists}
+          />
+        )}
+        {view === "month" && (
+          <MonthView
+            referenceDate={date}
+            events={allEvents}
+            colorByCalendar={colorByCalendar}
+            today={new Date()}
+            tasks={allTasks}
+            taskLists={taskLists}
+          />
+        )}
+        {view === "agenda" && (
+          <AgendaView
+            referenceDate={date}
+            events={allEvents}
+            calendars={calendars}
+            colorByCalendar={colorByCalendar}
+            today={new Date()}
+            tasks={allTasks}
+            taskLists={taskLists}
+          />
+        )}
+      </div>
+    </CalendarInteractionProvider>
   );
 }

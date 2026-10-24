@@ -51,6 +51,23 @@ export async function listCalendars(accessToken: string): Promise<GoogleCalendar
 }
 
 /**
+ * Narrows a calendar list down to the ones the user can actually write to —
+ * `owner` or `writer` `accessRole`, or no `accessRole` at all (an older/
+ * legacy calendarList entry that predates Google annotating this field,
+ * treated as writable rather than excluded by default). Drops `reader` and
+ * `freeBusyReader` entries (e.g. a read-only subscribed Holidays calendar).
+ *
+ * Used to scope the quick-create popup's calendar picker: offering a
+ * read-only calendar there would let the user pick it and hit Save only to
+ * get an unhelpful 403 back from Google.
+ */
+export function filterWritableCalendars(calendars: GoogleCalendarListEntry[]): GoogleCalendarListEntry[] {
+  return calendars.filter(
+    (calendar) => !calendar.accessRole || calendar.accessRole === "owner" || calendar.accessRole === "writer",
+  );
+}
+
+/**
  * Fetches events for a single calendar within a time range. `singleEvents=true`
  * expands recurring events into concrete instances, and `orderBy=startTime`
  * returns them in chronological order. Google's response omits `calendarId`

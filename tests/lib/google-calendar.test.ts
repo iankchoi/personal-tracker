@@ -1,6 +1,13 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { createEvent, deleteEvent, listCalendars, listEvents, updateEvent } from "../../lib/google-calendar";
+import {
+  createEvent,
+  deleteEvent,
+  filterWritableCalendars,
+  listCalendars,
+  listEvents,
+  updateEvent,
+} from "../../lib/google-calendar";
 
 /** The stubbed global `fetch`'s recorded calls, as `[url, init]` pairs. */
 function fetchCalls(): [string, { body: string }][] {
@@ -172,4 +179,15 @@ test("deleteEvent throws on a non-ok response", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
 
   await expect(deleteEvent("tok", "primary", "evt1")).rejects.toThrow();
+});
+
+test("filterWritableCalendars keeps owner and writer calendars, drops reader and freeBusyReader, and keeps an entry with no accessRole at all", () => {
+  const calendars = [
+    { id: "a", summary: "Primary", backgroundColor: "#000", accessRole: "owner" as const },
+    { id: "b", summary: "Shared", backgroundColor: "#000", accessRole: "writer" as const },
+    { id: "c", summary: "Holidays", backgroundColor: "#000", accessRole: "reader" as const },
+    { id: "d", summary: "Someone's free/busy", backgroundColor: "#000", accessRole: "freeBusyReader" as const },
+    { id: "e", summary: "Legacy entry", backgroundColor: "#000" },
+  ];
+  expect(filterWritableCalendars(calendars).map((c) => c.id)).toEqual(["a", "b", "e"]);
 });

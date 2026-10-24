@@ -165,8 +165,10 @@ export function EventEditor(props: {
   const [endTime, setEndTime] = useState(end.time);
   const [calendarId, setCalendarId] = useState(initial.calendarId);
   const [notifyMinutesBefore, setNotifyMinutesBefore] = useState(initial.notifyMinutesBefore ?? 30);
+  const [notifyTouched, setNotifyTouched] = useState(false);
   const [location, setLocation] = useState(initial.location ?? "");
   const [addGoogleMeet, setAddGoogleMeet] = useState(initial.addGoogleMeet ?? false);
+  const [meetTouched, setMeetTouched] = useState(false);
   const [description, setDescription] = useState(initial.description ?? "");
   const [guestEmails, setGuestEmails] = useState<string[]>(initial.guestEmails ?? []);
   const [guestInput, setGuestInput] = useState("");
@@ -201,6 +203,30 @@ export function EventEditor(props: {
     setSaving(true);
     setError(null);
     try {
+      // Meet and Notify are the two fields where "the value this session
+      // happens to be seeded/defaulted to" and "the user actually asked for
+      // this" are different things, and conflating them would silently
+      // mutate real Google Calendar data on an edit that never touched
+      // either field:
+      // - `addGoogleMeet: true` sent on *every* save would make Part 1's
+      //   `buildEventPayload` generate a brand-new `conferenceData
+      //   .createRequest.requestId` each time — i.e. editing just the title
+      //   of an event that already has Meet would mint a fresh Meet link on
+      //   every save.
+      // - `notifyMinutesBefore` seeded from `initial.notifyMinutesBefore ??
+      //   30` turns Part 1's `null` ("no popup override, use the calendar's
+      //   default reminder" — the common case) into a concrete `30` with no
+      //   way to tell "the user wants 30" apart from "this just defaulted to
+      //   30" — sent on every save, it would force a 30-minute override
+      //   onto any event that never had one.
+      // On `"edit"`, an untouched field sends `undefined` instead of its
+      // current displayed value — Part 1's update semantics treat `undefined`
+      // as "don't mention this field at all" (left alone), which is exactly
+      // "this edit never touched it." Touching the field (even toggling Meet
+      // back to its original state, or typing then retyping the same
+      // number) sends the real explicit value, including `false` for Meet.
+      // On `"create"` there's nothing pre-existing to accidentally clobber,
+      // so both are always sent explicitly regardless of touched state.
       const input: EventActionInput = {
         calendarId,
         title,
@@ -210,8 +236,8 @@ export function EventEditor(props: {
         description: description || undefined,
         location: location || undefined,
         colorToken,
-        notifyMinutesBefore,
-        addGoogleMeet,
+        notifyMinutesBefore: mode === "create" || notifyTouched ? notifyMinutesBefore : undefined,
+        addGoogleMeet: mode === "create" || meetTouched ? addGoogleMeet : undefined,
         guestEmails,
         guestsCanModify,
         guestsCanInviteOthers,
@@ -327,7 +353,10 @@ export function EventEditor(props: {
           type="number"
           min={0}
           value={notifyMinutesBefore}
-          onChange={(event) => setNotifyMinutesBefore(Number(event.target.value))}
+          onChange={(event) => {
+            setNotifyMinutesBefore(Number(event.target.value));
+            setNotifyTouched(true);
+          }}
         />
         <span>minutes before</span>
       </div>
@@ -349,7 +378,10 @@ export function EventEditor(props: {
           type="button"
           className="ee-meet-toggle"
           aria-pressed={addGoogleMeet}
-          onClick={() => setAddGoogleMeet((current) => !current)}
+          onClick={() => {
+            setAddGoogleMeet((current) => !current);
+            setMeetTouched(true);
+          }}
         >
           {addGoogleMeet ? "Google Meet video conferencing added" : "Add Google Meet video conferencing"}
         </button>

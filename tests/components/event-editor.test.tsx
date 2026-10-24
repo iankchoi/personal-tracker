@@ -215,3 +215,119 @@ test("a failed Save (e.g. non-organizer event rejected by Google) surfaces the e
   expect(await screen.findByRole("alert")).toHaveTextContent("403");
   expect(onSaved).not.toHaveBeenCalled();
 });
+
+test("editing an event that already has Meet, changing only the title, sends addGoogleMeet: undefined (not true)", async () => {
+  render(
+    <EventEditor
+      mode="edit"
+      initial={{
+        eventId: "e1",
+        calendarId: "primary",
+        title: "Standup",
+        start: "2026-10-20T13:00:00.000Z",
+        end: "2026-10-20T14:00:00.000Z",
+        allDay: false,
+        addGoogleMeet: true,
+      }}
+      calendars={cals}
+      onSaved={vi.fn()}
+      onDeleted={vi.fn()}
+      onCancel={vi.fn()}
+    />,
+  );
+
+  await userEvent.clear(screen.getByLabelText(/^title$/i));
+  await userEvent.type(screen.getByLabelText(/^title$/i), "Standup (renamed)");
+  await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Standup (renamed)", addGoogleMeet: undefined }),
+  );
+});
+
+test("editing an event with no popup reminder override, changing only the title, sends notifyMinutesBefore: undefined (not 30)", async () => {
+  render(
+    <EventEditor
+      mode="edit"
+      initial={{
+        eventId: "e1",
+        calendarId: "primary",
+        title: "Standup",
+        start: "2026-10-20T13:00:00.000Z",
+        end: "2026-10-20T14:00:00.000Z",
+        allDay: false,
+        notifyMinutesBefore: null,
+      }}
+      calendars={cals}
+      onSaved={vi.fn()}
+      onDeleted={vi.fn()}
+      onCancel={vi.fn()}
+    />,
+  );
+
+  await userEvent.clear(screen.getByLabelText(/^title$/i));
+  await userEvent.type(screen.getByLabelText(/^title$/i), "Standup (renamed)");
+  await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Standup (renamed)", notifyMinutesBefore: undefined }),
+  );
+});
+
+test("actually toggling Meet and changing Notify during an edit sends the real explicit values, not undefined", async () => {
+  render(
+    <EventEditor
+      mode="edit"
+      initial={{
+        eventId: "e1",
+        calendarId: "primary",
+        title: "Standup",
+        start: "2026-10-20T13:00:00.000Z",
+        end: "2026-10-20T14:00:00.000Z",
+        allDay: false,
+        addGoogleMeet: false,
+        notifyMinutesBefore: null,
+      }}
+      calendars={cals}
+      onSaved={vi.fn()}
+      onDeleted={vi.fn()}
+      onCancel={vi.fn()}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /add google meet/i }));
+
+  const notifyInput = screen.getByLabelText(/notify/i);
+  await userEvent.clear(notifyInput);
+  await userEvent.type(notifyInput, "15");
+
+  await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({ addGoogleMeet: true, notifyMinutesBefore: 15 }),
+  );
+});
+
+test("creating a new event always sends addGoogleMeet and notifyMinutesBefore with their current displayed values, regardless of touched state", async () => {
+  render(
+    <EventEditor
+      mode="create"
+      initial={{ calendarId: "primary" }}
+      calendars={cals}
+      onSaved={vi.fn()}
+      onDeleted={vi.fn()}
+      onCancel={vi.fn()}
+    />,
+  );
+
+  await userEvent.type(screen.getByLabelText(/^title$/i), "New event");
+  await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await vi.waitFor(() => expect(mockCreateEventAction).toHaveBeenCalled());
+  expect(mockCreateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({ addGoogleMeet: false, notifyMinutesBefore: 30 }),
+  );
+});

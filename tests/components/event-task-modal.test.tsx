@@ -1,12 +1,23 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
-const { mockCreateEventAction, mockUpdateEventAction, mockDeleteEventAction, mockRefresh } = vi.hoisted(() => ({
+const {
+  mockCreateEventAction,
+  mockUpdateEventAction,
+  mockDeleteEventAction,
+  mockCreateTaskAction,
+  mockUpdateTaskAction,
+  mockDeleteTaskAction,
+  mockRefresh,
+} = vi.hoisted(() => ({
   mockCreateEventAction: vi.fn(),
   mockUpdateEventAction: vi.fn(),
   mockDeleteEventAction: vi.fn(),
+  mockCreateTaskAction: vi.fn(),
+  mockUpdateTaskAction: vi.fn(),
+  mockDeleteTaskAction: vi.fn(),
   mockRefresh: vi.fn(),
 }));
 
@@ -14,6 +25,13 @@ vi.mock("../../lib/actions/calendar-events", () => ({
   createEventAction: mockCreateEventAction,
   updateEventAction: mockUpdateEventAction,
   deleteEventAction: mockDeleteEventAction,
+}));
+// EventTaskModal pulls in TaskEditor (and therefore the Tasks actions)
+// statically, and the Task-side tests below reach it through "More options".
+vi.mock("../../lib/actions/calendar-tasks", () => ({
+  createTaskAction: mockCreateTaskAction,
+  updateTaskAction: mockUpdateTaskAction,
+  deleteTaskAction: mockDeleteTaskAction,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
 
@@ -89,6 +107,9 @@ afterEach(() => {
   mockCreateEventAction.mockReset().mockResolvedValue({ id: "e1", calendarId: "primary" });
   mockUpdateEventAction.mockReset().mockResolvedValue({ id: "e1" });
   mockDeleteEventAction.mockReset().mockResolvedValue(undefined);
+  mockCreateTaskAction.mockReset().mockResolvedValue({ id: "t1", taskListId: "list-1" });
+  mockUpdateTaskAction.mockReset().mockResolvedValue({ id: "t1" });
+  mockDeleteTaskAction.mockReset().mockResolvedValue(undefined);
   mockRefresh.mockReset();
 });
 
@@ -257,4 +278,87 @@ test("More options opens the full editor pre-filled with what was typed in the q
   // Create mode leaves the calendar picker live, and it carries the choice over.
   expect(screen.getByLabelText(/^calendar$/i)).toHaveValue("shared");
   expect(screen.getByLabelText(/start time/i)).toHaveValue("09:00");
+});
+
+// ---------------------------------------------------------------------------
+// Regression on Fix 10 — an incomplete time string must never reach
+// toISOString() during render
+// ---------------------------------------------------------------------------
+//
+// `draftToEventEditorInitial` runs during EventTaskModal's *render*, so
+// `new Date("2026-10-22T:00").toISOString()` raising RangeError took the whole
+// Calendar page down to Next's global error screen (there's no error boundary
+// in app/) — not just the modal. Reachable in one gesture: clear the quick
+// popup's start-time field, click "More options".
+
+test("clearing the start time then clicking More options opens the full editor with a sensible default, instead of crashing", async () => {
+  render(<Harness events={[]} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "open create" }));
+  await userEvent.type(screen.getByLabelText(/^title$/i), "Trip planning");
+
+  fireEvent.change(screen.getByLabelText(/start time/i), { target: { value: "" } });
+  expect(screen.getByLabelText(/start time/i)).toHaveValue("");
+
+  await userEvent.click(screen.getByRole("button", { name: /more options/i }));
+
+  // The full editor rendered at all — a throw here used to replace the page.
+  expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
+  // …and seeded the shared 9-10 AM / 1-hour default, not garbage.
+  expect(screen.getByLabelText(/start time/i)).toHaveValue("09:00");
+  expect(screen.getByLabelText(/end time/i)).toHaveValue("10:00");
+  // The rest of the draft still carried over.
+  expect(screen.getByLabelText(/^title$/i)).toHaveValue("Trip planning");
+});
+
+test("clearing only the end time keeps the start the user chose and defaults the end to one hour later", async () => {
+  render(<Harness events={[]} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "open create" }));
+  fireEvent.change(screen.getByLabelText(/start time/i), { target: { value: "14:00" } });
+  fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: "" } });
+
+  await userEvent.click(screen.getByRole("button", { name: /more options/i }));
+
+  expect(screen.getByLabelText(/start time/i)).toHaveValue("14:00");
+  expect(screen.getByLabelText(/end time/i)).toHaveValue("15:00");
+});
+
+test("clearing both times then clicking More options still opens a usable editor, and saving it sends a valid range", async () => {
+  render(<Harness events={[]} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "open create" }));
+  await userEvent.type(screen.getByLabelText(/^title$/i), "Trip planning");
+  fireEvent.change(screen.getByLabelText(/start time/i), { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: "" } });
+
+  await userEvent.click(screen.getByRole("button", { name: /more options/i }));
+  await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  await vi.waitFor(() => expect(mockCreateEventAction).toHaveBeenCalled());
+  expect(mockCreateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({
+      title: "Trip planning",
+      start: "2026-10-22T09:00:00.000Z",
+      end: "2026-10-22T10:00:00.000Z",
+      allDay: false,
+    }),
+  );
+});
+
+test("clearing the Task side's due time then clicking More options opens the Task editor with no time set", async () => {
+  render(<Harness events={[]} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "open create" }));
+  await userEvent.click(screen.getByRole("button", { name: "Task" }));
+  await userEvent.type(screen.getByLabelText(/^title$/i), "Essay draft");
+  fireEvent.change(screen.getByLabelText(/due time/i), { target: { value: "" } });
+
+  await userEvent.click(screen.getByRole("button", { name: /more options/i }));
+
+  // The Task editor (it has a task-list picker; the Event editor has guests).
+  expect(screen.getByLabelText(/task list/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/^title$/i)).toHaveValue("Essay draft");
+  expect(screen.getByLabelText(/due date/i)).toHaveValue("2026-10-22");
+  expect(screen.getByLabelText(/due time/i)).toHaveValue("");
 });

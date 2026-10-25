@@ -13,7 +13,7 @@ import type { GoogleTaskList } from "@/lib/google-tasks";
 import type { PopupState } from "./CalendarInteractionProvider";
 import { EventEditor } from "./EventEditor";
 import { ModalShell } from "./ModalShell";
-import { QuickCreatePopup, type QuickCreateDraft } from "./QuickCreatePopup";
+import { addOneHour, QuickCreatePopup, type QuickCreateDraft } from "./QuickCreatePopup";
 import { TaskEditor } from "./TaskEditor";
 
 /**
@@ -91,9 +91,42 @@ function calendarTaskToEditorInitial(
   };
 }
 
-/** Combines a `YYYY-MM-DD` date and an `HH:MM` time into the ISO date-time string `EventActionInput.start`/`end` expect — mirrors `QuickCreatePopup.tsx`'s `combineDateTime`. */
-function combineDateTime(dateStr: string, timeStr: string): string {
-  return new Date(`${dateStr}T${timeStr}:00`).toISOString();
+/**
+ * A complete 24-hour wall-clock time, i.e. what an `<input type="time">`
+ * reports once it holds a real value. The point of validating at all is that
+ * a time input reports `""` while cleared or mid-edit, so neither
+ * `draft.startTime` nor `draft.endTime` can be trusted to name an instant.
+ * The hour/minute ranges are pinned (rather than a loose `\d\d:\d\d`) so a
+ * nonsense value like `"99:99"` is rejected here too, before it can reach
+ * `addOneHour`.
+ */
+const COMPLETE_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** `EventEditor`'s own `defaultWhen()` start time, mirrored here for the same "no usable time to carry over" case. */
+const DEFAULT_START_TIME = "09:00";
+
+/**
+ * Combines a `YYYY-MM-DD` date and an `HH:MM` time into the ISO date-time
+ * string `EventActionInput.start`/`end` expect — mirrors
+ * `QuickCreatePopup.tsx`'s `combineDateTime`, except that this copy returns
+ * `undefined` instead of throwing when the two pieces don't name a real
+ * instant.
+ *
+ * That difference matters because this one runs during **render**, not inside
+ * an event handler: `new Date("2026-10-22T:00").toISOString()` raises
+ * `RangeError: Invalid time value`, and with no error boundary anywhere in
+ * `app/` a throw here takes the whole Calendar page down to Next's global
+ * error screen rather than just breaking the modal. `QuickCreatePopup`'s copy
+ * can afford to throw because its only caller is inside `handleSave`'s
+ * `try`/`catch`, where it degrades to an inline error message.
+ *
+ * `undefined` is a shape `EventEditor` already handles: its `splitDateTime`
+ * falls back to `defaultWhen()` for an absent `start`/`end`, exactly as it
+ * does for a create session opened with no draft at all.
+ */
+function combineDateTime(dateStr: string, timeStr: string): string | undefined {
+  const instant = new Date(`${dateStr}T${timeStr}:00`);
+  return Number.isNaN(instant.getTime()) ? undefined : instant.toISOString();
 }
 
 /**
@@ -104,24 +137,39 @@ function combineDateTime(dateStr: string, timeStr: string): string {
  * and dropped the title, the adjusted times, and any non-default calendar the
  * user had picked — losing work at exactly the moment they asked for *more*
  * fields, not fewer.
+ *
+ * Both time strings are checked before being used, because the quick popup's
+ * start/end fields are freely editable: clearing one and clicking "More
+ * options" is a single gesture, and it used to crash the page. An unusable
+ * time falls back to the same 9 AM / 1-hour-duration convention the quick
+ * popup and `EventEditor` already share — and crucially, each end falls back
+ * *independently*, so a user who set the start to 2 PM and cleared the end
+ * gets 2-3 PM rather than losing the start they did choose.
  */
 function draftToEventEditorInitial(
   draft: QuickCreateDraft,
 ): Partial<EventActionInput> & { calendarId: string } {
+  const startTime = COMPLETE_TIME.test(draft.startTime) ? draft.startTime : DEFAULT_START_TIME;
+  const endTime = COMPLETE_TIME.test(draft.endTime) ? draft.endTime : addOneHour(startTime);
+
   return {
     calendarId: draft.calendarId,
     title: draft.title,
-    start: combineDateTime(draft.date, draft.startTime),
-    end: combineDateTime(draft.date, draft.endTime),
+    start: combineDateTime(draft.date, startTime),
+    end: combineDateTime(draft.date, endTime),
     allDay: false,
   };
 }
 
 /**
- * The Task-side counterpart of `draftToEventEditorInitial`. An empty
- * `draft.dueTime` stays "no time set" (`null`) rather than becoming `""` —
- * the shape `TaskActionInput` documents and `TaskEditor` seeds its blank time
- * input from.
+ * The Task-side counterpart of `draftToEventEditorInitial`. There's no
+ * `toISOString()` on this path to throw, but `dueTime` is normalized through
+ * the same `COMPLETE_TIME` check anyway: anything that isn't a real time —
+ * `""` from a cleared input included — becomes `null`, the "no time set"
+ * shape `TaskActionInput` documents and `TaskEditor` seeds its blank time
+ * input from. Without the check, a junk string would flow through
+ * `TaskEditor` into the action's `parseDueAt` and be stored as an Invalid
+ * Date.
  */
 function draftToTaskEditorInitial(
   draft: QuickCreateDraft,
@@ -130,7 +178,7 @@ function draftToTaskEditorInitial(
     taskListId: draft.taskListId,
     title: draft.title,
     dueDate: draft.date,
-    dueTime: draft.dueTime || null,
+    dueTime: COMPLETE_TIME.test(draft.dueTime) ? draft.dueTime : null,
   };
 }
 

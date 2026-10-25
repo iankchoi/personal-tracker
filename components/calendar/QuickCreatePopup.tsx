@@ -50,8 +50,13 @@ function formatHourAsTime(hour: number): string {
   return `${String(hour).padStart(2, "0")}:00`;
 }
 
-/** Adds one hour to a `HH:MM` time string, wrapping past midnight back to `00:00`. */
-function addOneHour(time: string): string {
+/**
+ * Adds one hour to a `HH:MM` time string, wrapping past midnight back to
+ * `00:00`. Exported because `EventTaskModal` needs the same 1-hour default
+ * duration when it has to replace an end time the user cleared mid-edit (see
+ * `draftToEventEditorInitial`) — one convention, one implementation.
+ */
+export function addOneHour(time: string): string {
   const [hourStr, minuteStr] = time.split(":");
   const totalMinutes = (Number(hourStr) * 60 + Number(minuteStr) + 60) % (24 * 60);
   const hour = Math.floor(totalMinutes / 60);

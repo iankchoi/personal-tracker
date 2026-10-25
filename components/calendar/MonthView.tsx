@@ -10,6 +10,7 @@ import {
   isSameLocalDay,
   isSameLocalMonth,
 } from "@/lib/calendar-dates";
+import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import { getAllDayEvents } from "@/lib/calendar-layout";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
@@ -20,9 +21,6 @@ import { TaskCheckbox } from "./TaskCheckbox";
 
 /** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. Tasks count as chips too. */
 const MAX_VISIBLE_CHIPS = 3;
-
-/** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
-const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
 
 /** A cell's event chips and task checkboxes merged into one orderable list, so overflow counting (`MAX_VISIBLE_CHIPS`) treats both uniformly. */
 type DayEntry = { kind: "event"; event: GoogleCalendarEvent } | { kind: "task"; task: CalendarTaskItem };
@@ -67,7 +65,9 @@ function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[
  * Color mapping follows Task 7/8's precedent: `app/globals.css` already
  * defines one `.mg-chip` modifier class per `CalendarColorToken`
  * (`.mg-chip.cal`/`.wk`/`.rem`/`.note`/`.jour`/`.cv`), so the token string
- * returned by `colorByCalendar` is used directly as the chip's class name.
+ * returned by `resolveEventColorToken` — the event's own `colorId` override
+ * when it has one, its calendar's assigned color otherwise — is used directly
+ * as the chip's class name.
  *
  * `tasks` due on each day are merged into that same cell (after its event
  * chips, per Task 7's "implementer's call" on ordering) and rendered via
@@ -132,7 +132,7 @@ export function MonthView({
                         if (entry.kind === "task") {
                           return <TaskCheckbox key={entry.task.id} task={entry.task} onTitleClick={openEditTask} />;
                         }
-                        const colorToken = colorByCalendar[entry.event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+                        const colorToken = resolveEventColorToken(entry.event, colorByCalendar);
                         return (
                           <span
                             key={entry.event.id}

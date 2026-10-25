@@ -1,4 +1,5 @@
 import type { CalendarColorToken } from "./calendar-colors";
+import type { GoogleCalendarEvent } from "./google-calendar";
 
 export const TOKEN_TO_COLOR_ID: Record<CalendarColorToken, string> = {
   cal: "7", // Peacock
@@ -37,4 +38,38 @@ export function tokenForColorId(colorId: string | undefined): CalendarColorToken
   }
 
   return COLOR_ID_TO_TOKEN[colorId] ?? null;
+}
+
+/**
+ * Fallback color token for an event whose `calendarId` is somehow missing from
+ * `colorByCalendar` — the app's blue, matching the editor's own default swatch.
+ */
+export const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
+
+/**
+ * The color token an event should actually *render* with, resolving the design
+ * spec's stated precedence in the one place every view calls:
+ *
+ * 1. the event's own `colorId` (the per-item override the color picker writes
+ *    through `buildEventPayload`), mapped back through `tokenForColorId`;
+ * 2. otherwise its calendar's assigned token (the per-*calendar* color
+ *    assignment from the read-only-views work, unchanged);
+ * 3. otherwise `FALLBACK_COLOR_TOKEN`.
+ *
+ * This exists because all four rendering surfaces (`HourGrid`, `MonthView`,
+ * `AgendaView`, `DayDetailView`) used to compute the token straight from
+ * `colorByCalendar` and never look at `colorId` at all — so picking a color in
+ * the editor wrote the right `colorId` to Google but the grid kept painting the
+ * calendar's default. Keeping the precedence here rather than inline in each
+ * view is what stops the four from drifting apart again.
+ *
+ * Tasks deliberately don't go through this: a `CalendarTaskItem` carries its own
+ * local `colorToken` (Google Tasks has no color field), which `TaskCheckbox`
+ * resolves itself.
+ */
+export function resolveEventColorToken(
+  event: Pick<GoogleCalendarEvent, "calendarId" | "colorId">,
+  colorByCalendar: Record<string, CalendarColorToken>,
+): CalendarColorToken {
+  return tokenForColorId(event.colorId) ?? colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
 }

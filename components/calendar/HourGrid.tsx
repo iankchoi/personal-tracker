@@ -16,6 +16,7 @@ import {
   getAllDayEvents,
   layoutTimedEvents,
 } from "@/lib/calendar-layout";
+import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import { layoutColumns, type ColumnedGridItem, type PositionedGridItem } from "@/lib/calendar-overlap";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
@@ -25,9 +26,6 @@ import { TaskCheckbox } from "./TaskCheckbox";
 
 /** The fixed set of hour rows shown on the grid, e.g. [7, 8, ..., 21] for the default 7 AM–10 PM window. */
 const GRID_HOURS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => GRID_START_HOUR + i);
-
-/** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
-const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
 
 /** Formats an hour-of-day (0-23) as a grid row label, e.g. 7 -> "7 AM", 12 -> "12 PM". */
 function formatHourLabel(hour: number): string {
@@ -136,7 +134,9 @@ function getAllDayTasks(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[
  * (`.wg-event.cal`/`.wk`/`.rem`/`.note`/`.jour`/`.cv`, and the `.wg-chip`
  * equivalents), each keyed to that token's existing `--*-bg`/`--*-ink`/
  * `--*-accent` custom properties. That lets the token string returned by
- * `colorByCalendar` be used directly as the CSS class name below.
+ * `resolveEventColorToken` be used directly as the CSS class name below —
+ * which is the event's own `colorId` override when it has one, and its
+ * calendar's assigned color otherwise (see lib/calendar-event-colors.ts).
  */
 export function HourGrid({
   days,
@@ -173,7 +173,7 @@ export function HourGrid({
       {days.map((day, index) => (
         <div key={day.getTime()} className="wg-allday" style={{ gridColumn: index + 2 }}>
           {getAllDayEvents(events, day).map((event) => {
-            const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+            const colorToken = resolveEventColorToken(event, colorByCalendar);
             return (
               <span key={event.id} className={`wg-chip ${colorToken}`} onClick={() => openEditEvent(event)}>
                 {event.summary}
@@ -221,7 +221,7 @@ export function HourGrid({
               }
 
               const event = block.item;
-              const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+              const colorToken = resolveEventColorToken(event, colorByCalendar);
               return (
                 <div
                   key={`event-${event.id}`}

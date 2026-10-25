@@ -11,6 +11,7 @@ import {
   formatTimeLabel,
   isSameLocalDay,
 } from "@/lib/calendar-dates";
+import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import { getViewRange } from "@/lib/calendar-ranges";
 import { getAllDayEvents } from "@/lib/calendar-layout";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
@@ -24,9 +25,6 @@ import { TaskCheckbox } from "./TaskCheckbox";
 
 /** Length of the agenda window, matching `getViewRange("agenda", ...)` in lib/calendar-ranges.ts. */
 const AGENDA_WINDOW_DAYS = 14;
-
-/** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
-const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
 
 /**
  * Agenda's day-group heading, matching the mockup: "Today"/"Tomorrow" for
@@ -95,8 +93,9 @@ function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[
  * Color mapping follows the same convention as `HourGrid`/`MonthView`:
  * `app/globals.css`'s `.src` modifier classes (`.src.cal`/`.wk`/`.rem`/
  * `.note`/`.jour`/`.cv`) are keyed one-to-one with `CalendarColorToken`
- * values, so the token string from `colorByCalendar` is used directly as
- * the row's `.src` class name.
+ * values, so the token string from `resolveEventColorToken` — the event's own
+ * `colorId` override when it has one, its calendar's assigned color otherwise
+ * — is used directly as the row's `.src` class name.
  *
  * `tasks` due on each day are merged into that same day's group (rendered
  * after its event rowcards, per Task 7's "implementer's call" on ordering)
@@ -144,7 +143,7 @@ export function AgendaView({
               </div>
               <div className="cards">
                 {dayEvents.map((event) => {
-                  const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+                  const colorToken = resolveEventColorToken(event, colorByCalendar);
                   const timeLabel = event.start.dateTime ? formatTimeLabel(event.start.dateTime) : "All day";
                   const calendarName = calendarNameById.get(event.calendarId) ?? "";
 

@@ -5,15 +5,12 @@ import {
   MONTH_NAMES_FULL,
   WEEKDAY_NAMES_FULL,
   addDays,
-  eventStart,
-  eventStartDay,
-  formatDateParam,
   formatTimeLabel,
   isSameLocalDay,
 } from "@/lib/calendar-dates";
+import { getEventsForDay, getTasksForDay } from "@/lib/calendar-day-items";
 import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import { getViewRange } from "@/lib/calendar-ranges";
-import { getAllDayEvents } from "@/lib/calendar-layout";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
@@ -51,29 +48,6 @@ function formatGroupSub(day: Date, today: Date): string {
     return `${WEEKDAY_NAMES_FULL[day.getDay()]}, ${monthDay}`;
   }
   return monthDay;
-}
-
-/**
- * All events (all-day or timed) that fall on `day`, all-day events first and
- * timed events sorted chronologically — mirrors `MonthView`'s
- * `getEventsForDay`. The sort is explicit because `events` may combine
- * multiple calendars whose individual lists are each sorted but whose merge
- * is not guaranteed to be. Day membership comes from `eventStartDay`, which
- * reads each event's own offset rather than the server's timezone (see
- * lib/calendar-dates.ts).
- */
-function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalendarEvent[] {
-  const allDay = getAllDayEvents(events, day);
-  const timed = events
-    .filter((event) => event.start.dateTime && isSameLocalDay(eventStartDay(event), day))
-    .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime());
-  return [...allDay, ...timed];
-}
-
-/** Tasks due on `day`, mirroring `MonthView`'s sibling helper of the same name. */
-function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[] {
-  const dayParam = formatDateParam(day);
-  return tasks.filter((task) => task.dueDate === dayParam);
 }
 
 /**

@@ -6,11 +6,13 @@ import type { EventActionInput } from "../../lib/actions/calendar-events";
 import type { TaskActionInput } from "../../lib/actions/calendar-tasks";
 import { allDayEndToInclusive } from "../../lib/calendar-dates";
 import { tokenForColorId } from "../../lib/calendar-event-colors";
+import type { CalendarColorToken } from "@/lib/calendar-colors";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import type { PopupState } from "./CalendarInteractionProvider";
+import { DayDetailView } from "./DayDetailView";
 import { EventEditor } from "./EventEditor";
 import { ModalShell } from "./ModalShell";
 import { addOneHour, QuickCreatePopup, type QuickCreateDraft } from "./QuickCreatePopup";
@@ -204,6 +206,11 @@ function draftToTaskEditorInitial(
  * quick-popup step, per the design doc ("Clicking an existing event or task
  * opens the identical popup/editor").
  *
+ * `"day-detail"` renders `DayDetailView` — Month view's "+N more" opened out
+ * into that day's complete list. It's the one surface that needs the page's
+ * whole event/task window rather than a single item, which is why `events`/
+ * `tasks`/`colorByCalendar` are threaded in alongside `popup`.
+ *
  * ## Why `key={...sessionId}` and not another render-time reset
  *
  * Every editor seeds its fields with `useState(initial.x ?? ...)`, which only
@@ -226,9 +233,22 @@ export function EventTaskModal(props: {
   sessionId: number;
   calendars: GoogleCalendarListEntry[];
   taskLists: GoogleTaskList[];
+  /** The whole visible window's events/tasks and the calendar color map, used only by the `"day-detail"` surface — see `CalendarInteractionProvider`. */
+  events?: GoogleCalendarEvent[];
+  tasks?: CalendarTaskItem[];
+  colorByCalendar?: Record<string, CalendarColorToken>;
   onClose(): void;
 }) {
-  const { popup, sessionId, calendars, taskLists, onClose } = props;
+  const {
+    popup,
+    sessionId,
+    calendars,
+    taskLists,
+    events = [],
+    tasks = [],
+    colorByCalendar = {},
+    onClose,
+  } = props;
   const [draft, setDraft] = useState<QuickCreateDraft | null>(null);
 
   // Resets `draft` whenever `popup` itself changes (a fresh create/edit

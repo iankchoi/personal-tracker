@@ -267,7 +267,10 @@ a { color: inherit; text-decoration: none; }
 .mg-chip.pers { background: var(--cal-bg); color: var(--cal-ink); }
 .mg-chip.work { background: var(--wk-bg); color: var(--wk-ink); }
 .mg-chip.bday { background: var(--rem-bg); color: var(--rem-ink); }
-.mg-more { font-size: 11px; color: var(--muted); padding: 1px 6px; }
+/* "+N more" is a real <button> now that it opens the day-detail overlay, so it
+   needs the usual button reset to keep looking exactly like the label it was. */
+.mg-more { display: block; width: 100%; text-align: left; font: inherit; font-size: 11px; font-weight: 500; color: var(--muted); padding: 1px 6px; border: 0; border-radius: 4px; background: none; cursor: pointer; }
+.mg-more:hover { color: var(--text); background: var(--raised); }
 
 /* ---- agenda: layout with rail ---- */
 .agenda-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; }
@@ -335,6 +338,32 @@ a { color: inherit; text-decoration: none; }
 .modal-card:focus { outline: none; }
 .modal-card:focus-visible { outline: 2px solid var(--cal-accent); outline-offset: 2px; }
 
+/* Open transition. The popup used to appear instantaneously, which read as
+   abrupt rather than fast; these soften the arrival without slowing it down —
+   160ms/180ms on the existing `--ease-out` curve, i.e. still under the ~200ms
+   where a UI starts feeling sluggish. Deliberately open-only: ModalShell
+   unmounts on close, so there's nothing to animate out, and adding an exit
+   delay is exactly what would make dismissal feel laggy. */
+@keyframes modal-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-card-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+/* No fill mode on purpose: both animations end on the element's own resting
+   values, so letting the transform/opacity drop off afterwards leaves the card
+   with *no* lingering `transform` — a persisted one would make the card a
+   containing block for any `position: fixed` descendant, which is exactly how
+   the Places Autocomplete dropdown inside the event editor would end up
+   mispositioned. There's no start delay, so nothing flashes first either. */
+.modal-backdrop { animation: modal-backdrop-in 160ms var(--ease-out); }
+.modal-card { animation: modal-card-in 180ms var(--ease-out); }
+
+/* No other animation in this stylesheet is long or large enough to warrant a
+   reduced-motion opt-out, so this is the first such rule — a scale-up is the
+   kind of motion the preference exists for. The fade stays: it's an opacity
+   change with no movement, and dropping it entirely would put the abrupt
+   appear back for users who asked only for less *motion*. */
+@media (prefers-reduced-motion: reduce) {
+  .modal-card { animation-name: modal-backdrop-in; }
+}
+
 /* ---- quick-create popup (ported from .taste-skill/build/task-popup-mockup.html,
    with the mockup's raw hexes swapped for this app's tokens and its
    demo-only absolute anchoring dropped — ModalShell positions it now) ---- */
@@ -358,6 +387,28 @@ a { color: inherit; text-decoration: none; }
 .cp-cancel { border: 1px solid var(--control); background: var(--surface); color: var(--text); }
 .cp-save { border: 0; background: var(--text); color: var(--ground); }
 .cp-save:disabled { opacity: .6; cursor: progress; }
+
+/* ---- day detail (DayDetailView.tsx): Month view's "+N more" opened out into
+   that day's full list, inside the same ModalShell every editor uses. It
+   reuses `.cards`/`.rowcard` (and `.cards > .task-chip`) wholesale from Agenda
+   view, so only the card chrome, heading, and color dot are new here. ---- */
+.day-detail { width: 440px; max-width: 100%; padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 14px; }
+.dd-heading { margin: 0; font-size: 15px; font-weight: 600; }
+/* `.rowcard`'s own background is `--surface`, which is also the modal card's —
+   so inside this overlay the rows would read as one undifferentiated block.
+   Step them up to `--raised` (and drop the now-redundant border) so each row is
+   visibly its own clickable thing, with `--active` on hover. */
+.day-detail .rowcard { cursor: pointer; background: var(--raised); border-color: transparent; }
+.day-detail .rowcard:hover { background: var(--active); }
+/* The trailing color dot: same one-class-per-CalendarColorToken convention as
+   `.mg-chip`/`.src`/`.task-chip`, painted with each token's accent. */
+.dd-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.dd-dot.cal { background: var(--cal-accent); }
+.dd-dot.wk { background: var(--wk-accent); }
+.dd-dot.rem { background: var(--rem-accent); }
+.dd-dot.note { background: var(--note-accent); }
+.dd-dot.jour { background: var(--jour-accent); }
+.dd-dot.cv { background: var(--cv-accent); }
 
 /* ---- event editor (Task 3): the "More options" full editor, a modal overlay reusing .create-popup's base look where it makes sense but wider, with one icon+control row per field ---- */
 .event-editor { width: 440px; max-width: 100%; padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 10px; }

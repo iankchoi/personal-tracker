@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 
+import type { CalendarColorToken } from "@/lib/calendar-colors";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import {
   filterWritableCalendars,
@@ -24,13 +25,21 @@ export type PopupState =
   | { mode: "closed" }
   | { mode: "create"; kind: "event" | "task"; date: Date; hour?: number }
   | { mode: "edit-event"; event: GoogleCalendarEvent }
-  | { mode: "edit-task"; task: CalendarTaskItem };
+  | { mode: "edit-task"; task: CalendarTaskItem }
+  /**
+   * Month view's "+N more" overflow summary, opened out into a full list of
+   * that day's events and tasks. Carries only the `date` — the items are
+   * bucketed out of the provider's own `events`/`tasks` at render time, the
+   * same flat-list-plus-re-bucket shape every grid view already uses, so this
+   * state can't go stale against a `router.refresh()`.
+   */
+  | { mode: "day-detail"; date: Date };
 
 type CalendarInteractionContextValue = {
   popup: PopupState;
   /**
    * A monotonic counter bumped by every `openCreate`/`openEditEvent`/
-   * `openEditTask` call — one "session" of the popup being open, from that
+   * `openEditTask`/`openDayDetail` call — one "session" of the popup being open, from that
    * call until the next one. `EventTaskModal` keys its child on this, which is
    * what forces a genuinely fresh component instance per session.
    *
@@ -46,6 +55,8 @@ type CalendarInteractionContextValue = {
   openCreate(kind: "event" | "task", date: Date, hour?: number): void;
   openEditEvent(event: GoogleCalendarEvent): void;
   openEditTask(task: CalendarTaskItem): void;
+  /** Opens the day-detail list for `date` — Month view's "+N more" click target. */
+  openDayDetail(date: Date): void;
   close(): void;
 };
 
@@ -77,10 +88,22 @@ export function useCalendarInteraction(): CalendarInteractionContextValue {
  * design requirement: a quick-create Save against a read-only subscribed
  * calendar (e.g. Holidays) would otherwise fail with an unhelpful 403 from
  * Google.
+ *
+ * `events`/`tasks`/`colorByCalendar` are the same flat, whole-window lists the
+ * grid views already receive, threaded in here only so the `"day-detail"`
+ * surface can bucket a day out of them. That's what keeps `openDayDetail`'s
+ * signature a bare `(date)` — the alternative, stuffing the day's items into
+ * `PopupState` at click time, would freeze a snapshot that a subsequent
+ * `router.refresh()` (e.g. a task checked off inside the overlay) could no
+ * longer update. They're optional because the page's degraded
+ * reconnect/fetch-error paths render this provider with nothing fetched yet.
  */
 export function CalendarInteractionProvider(props: {
   calendars: GoogleCalendarListEntry[];
   taskLists: GoogleTaskList[];
+  events?: GoogleCalendarEvent[];
+  tasks?: CalendarTaskItem[];
+  colorByCalendar?: Record<string, CalendarColorToken>;
   children: ReactNode;
 }) {
   // `popup` and `sessionId` live in one state object so they can never be
@@ -118,6 +141,13 @@ export function CalendarInteractionProvider(props: {
     }));
   }, []);
 
+  const openDayDetail = useCallback((date: Date) => {
+    setSession((current) => ({
+      popup: { mode: "day-detail", date },
+      sessionId: current.sessionId + 1,
+    }));
+  }, []);
+
   // Closing ends the current session without starting a new one, so the
   // counter deliberately stays put here — the *next* open bumps it.
   const close = useCallback(() => {
@@ -125,8 +155,8 @@ export function CalendarInteractionProvider(props: {
   }, []);
 
   const value = useMemo(
-    () => ({ popup, sessionId, openCreate, openEditEvent, openEditTask, close }),
-    [popup, sessionId, openCreate, openEditEvent, openEditTask, close],
+    () => ({ popup, sessionId, openCreate, openEditEvent, openEditTask, openDayDetail, close }),
+    [popup, sessionId, openCreate, openEditEvent, openEditTask, openDayDetail, close],
   );
 
   return (
@@ -137,6 +167,9 @@ export function CalendarInteractionProvider(props: {
         sessionId={sessionId}
         calendars={writableCalendars}
         taskLists={props.taskLists}
+        events={props.events ?? []}
+        tasks={props.tasks ?? []}
+        colorByCalendar={props.colorByCalendar ?? {}}
         onClose={close}
       />
     </CalendarInteractionContext.Provider>

@@ -51,10 +51,20 @@ function formatTaskTime(dueTime: string): string {
  * is also disabled while the action is in flight, so a double-click can't
  * fire two overlapping toggles that race each other.
  *
- * In Part 2 this component also becomes clickable to open the task editor;
- * that interaction is out of this task's scope.
+ * `onTitleClick`, when given, fires when the title text (not the checkbox
+ * itself) is clicked — Part 2's calendar views pass `openEditTask` so clicking
+ * a task's title opens the editor, while clicking its checkbox always stays a
+ * pure complete-toggle. The title's click handler calls `preventDefault` so
+ * the browser's native "clicking inside a `<label>` activates its control"
+ * behavior doesn't also flip the checkbox.
  */
-export function TaskCheckbox({ task }: { task: CalendarTaskItem }) {
+export function TaskCheckbox({
+  task,
+  onTitleClick,
+}: {
+  task: CalendarTaskItem;
+  onTitleClick?(task: CalendarTaskItem): void;
+}) {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -88,7 +98,25 @@ export function TaskCheckbox({ task }: { task: CalendarTaskItem }) {
         disabled={isPending}
         onChange={handleChange}
       />
-      <span className={task.completed ? "task-title task-done" : "task-title"}>{task.title}</span>
+      <span
+        className={task.completed ? "task-title task-done" : "task-title"}
+        onClick={
+          onTitleClick
+            ? (event) => {
+                // `preventDefault` stops the label's native "clicking inside
+                // it activates its control" behavior from also toggling the
+                // checkbox; `stopPropagation` keeps the click from bubbling
+                // into an ancestor cell's own click-to-create handler (e.g.
+                // Month view's `.mg-cell`), which would otherwise fire too.
+                event.preventDefault();
+                event.stopPropagation();
+                onTitleClick(task);
+              }
+            : undefined
+        }
+      >
+        {task.title}
+      </span>
       {failed ? (
         <span className="task-error" role="alert">
           Couldn&apos;t update

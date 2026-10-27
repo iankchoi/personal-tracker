@@ -21,6 +21,9 @@
   --positive: #2e7d32; --negative: #b42318; --warning: #92400e;
   --pill-positive-bg: #dcfae5; --pill-positive-ink: #04250e;
   --pill-done-bg: #dcfae5; --pill-done-ink: #14532d;
+  /* The scrim behind a modal overlay (.modal-backdrop). A token rather than an
+     inline rgba() so the dark theme can deepen it without duplicating the rule. */
+  --scrim: rgba(17, 24, 39, 0.42);
 
   --font: var(--font-dm-sans), Inter, system-ui, sans-serif;
   --fs-hero: 64px; --fs-title: 32px; --fs-section: 14px; --fs-kpi: 30px; --fs-body: 14px; --fs-small: 12px;
@@ -60,6 +63,7 @@
   --positive: #3fc07a; --negative: #e5566f; --warning: #e5a93b;
   --pill-positive-bg: #172a1d; --pill-positive-ink: #3fc07a;
   --pill-done-bg: #172a1d; --pill-done-ink: #3fc07a;
+  --scrim: rgba(0, 0, 0, 0.6);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -263,7 +267,10 @@ a { color: inherit; text-decoration: none; }
 .mg-chip.pers { background: var(--cal-bg); color: var(--cal-ink); }
 .mg-chip.work { background: var(--wk-bg); color: var(--wk-ink); }
 .mg-chip.bday { background: var(--rem-bg); color: var(--rem-ink); }
-.mg-more { font-size: 11px; color: var(--muted); padding: 1px 6px; }
+/* "+N more" is a real <button> now that it opens the day-detail overlay, so it
+   needs the usual button reset to keep looking exactly like the label it was. */
+.mg-more { display: block; width: 100%; text-align: left; font: inherit; font-size: 11px; font-weight: 500; color: var(--muted); padding: 1px 6px; border: 0; border-radius: 4px; background: none; cursor: pointer; }
+.mg-more:hover { color: var(--text); background: var(--raised); }
 
 /* ---- agenda: layout with rail ---- */
 .agenda-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; }
@@ -315,6 +322,142 @@ a { color: inherit; text-decoration: none; }
 .wg-allday .task-chip { margin-top: 2px; }
 .mg-events .task-chip { font-size: 11px; }
 .cards > .task-chip { height: var(--row-height); padding: 0 16px; border-radius: 12px; }
+
+/* ---- modal overlay shell (ModalShell.tsx): the fixed, centered, backdropped
+   surface every create/edit card renders inside. The cards themselves
+   (.create-popup, .event-editor) stay plain in-flow boxes with no positioning
+   of their own — previously that meant they rendered as normal siblings below
+   the full-height calendar grid, i.e. nowhere visible above the fold. ---- */
+.modal-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px 16px; background: var(--scrim); }
+/* The card caps its height to the viewport and scrolls internally, so the tall
+   full editor stays reachable on a short window without the page itself ever
+   scrolling sideways or the actions row ending up off-screen. */
+.modal-card { max-width: 100%; max-height: calc(100vh - 48px); overflow-y: auto; border-radius: 16px; }
+/* Focus lands here on open (tabIndex={-1} + .focus()); the card is a container,
+   not a control, so it gets no persistent focus ring — only a keyboard ring. */
+.modal-card:focus { outline: none; }
+.modal-card:focus-visible { outline: 2px solid var(--cal-accent); outline-offset: 2px; }
+
+/* Open transition. The popup used to appear instantaneously, which read as
+   abrupt rather than fast; these soften the arrival without slowing it down —
+   160ms/180ms on the existing `--ease-out` curve, i.e. still under the ~200ms
+   where a UI starts feeling sluggish. Deliberately open-only: ModalShell
+   unmounts on close, so there's nothing to animate out, and adding an exit
+   delay is exactly what would make dismissal feel laggy. */
+@keyframes modal-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-card-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+/* No fill mode on purpose: both animations end on the element's own resting
+   values, so letting the transform/opacity drop off afterwards leaves the card
+   with *no* lingering `transform` — a persisted one would make the card a
+   containing block for any `position: fixed` descendant, which is exactly how
+   the Places Autocomplete dropdown inside the event editor would end up
+   mispositioned. There's no start delay, so nothing flashes first either. */
+.modal-backdrop { animation: modal-backdrop-in 160ms var(--ease-out); }
+.modal-card { animation: modal-card-in 180ms var(--ease-out); }
+
+/* No other animation in this stylesheet is long or large enough to warrant a
+   reduced-motion opt-out, so this is the first such rule — a scale-up is the
+   kind of motion the preference exists for. The fade stays: it's an opacity
+   change with no movement, and dropping it entirely would put the abrupt
+   appear back for users who asked only for less *motion*. */
+@media (prefers-reduced-motion: reduce) {
+  .modal-card { animation-name: modal-backdrop-in; }
+}
+
+/* ---- quick-create popup (ported from .taste-skill/build/task-popup-mockup.html,
+   with the mockup's raw hexes swapped for this app's tokens and its
+   demo-only absolute anchoring dropped — ModalShell positions it now) ---- */
+.create-popup { width: 320px; max-width: 100%; padding: 18px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12); }
+.cp-error { margin: 0 0 12px; padding: 8px 10px; border-radius: 8px; background: var(--cv-bg); color: var(--negative); font-size: 13px; font-weight: 500; }
+.cp-title-input { width: 100%; height: 36px; padding: 0 2px 6px; margin-bottom: 14px; border: none; border-bottom: 1px solid var(--border); background: none; color: var(--text); font: inherit; font-size: 16px; font-weight: 600; outline: none; }
+.cp-title-input::placeholder { color: var(--faint); font-weight: 400; }
+.cp-title-input:focus { border-bottom-color: var(--cal-accent); }
+.cp-type-toggle { display: flex; gap: 6px; margin-bottom: 14px; }
+.cp-type-toggle button { flex: 1; height: 32px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.cp-type-toggle button[aria-pressed="true"] { background: var(--text); color: var(--ground); border-color: var(--text); }
+.cp-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; flex-wrap: wrap; }
+.cp-row label { color: var(--muted); }
+.cp-row input, .cp-row select { min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.cp-row select { flex: 1; }
+.cp-row input[readonly] { color: var(--muted); }
+.cp-row .tilde { color: var(--faint); font-size: 12px; }
+.cp-more { display: inline-block; margin: 8px 0 16px; padding: 0; border: 0; background: none; color: var(--cal-accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.cp-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.cp-actions button { height: 34px; padding: 0 16px; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.cp-cancel { border: 1px solid var(--control); background: var(--surface); color: var(--text); }
+.cp-save { border: 0; background: var(--text); color: var(--ground); }
+.cp-save:disabled { opacity: .6; cursor: progress; }
+
+/* ---- day detail (DayDetailView.tsx): Month view's "+N more" opened out into
+   that day's full list, inside the same ModalShell every editor uses. It
+   reuses `.cards`/`.rowcard` (and `.cards > .task-chip`) wholesale from Agenda
+   view, so only the card chrome, heading, and color dot are new here. ---- */
+.day-detail { width: 440px; max-width: 100%; padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 14px; }
+.dd-heading { margin: 0; font-size: 15px; font-weight: 600; }
+/* `.rowcard`'s own background is `--surface`, which is also the modal card's —
+   so inside this overlay the rows would read as one undifferentiated block.
+   Step them up to `--raised` (and drop the now-redundant border) so each row is
+   visibly its own clickable thing, with `--active` on hover. */
+.day-detail .rowcard { cursor: pointer; background: var(--raised); border-color: transparent; }
+.day-detail .rowcard:hover { background: var(--active); }
+/* The trailing color dot: same one-class-per-CalendarColorToken convention as
+   `.mg-chip`/`.src`/`.task-chip`, painted with each token's accent. */
+.dd-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.dd-dot.cal { background: var(--cal-accent); }
+.dd-dot.wk { background: var(--wk-accent); }
+.dd-dot.rem { background: var(--rem-accent); }
+.dd-dot.note { background: var(--note-accent); }
+.dd-dot.jour { background: var(--jour-accent); }
+.dd-dot.cv { background: var(--cv-accent); }
+
+/* ---- event editor (Task 3): the "More options" full editor, a modal overlay reusing .create-popup's base look where it makes sense but wider, with one icon+control row per field ---- */
+.event-editor { width: 440px; max-width: 100%; padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 10px; }
+/* --cv-bg, not --pill-done-bg: the latter is the green "done" tint, which
+   rendered the editor's error message as red text on a success-green card. */
+.ee-error { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--cv-bg); color: var(--negative); font-size: 13px; font-weight: 500; }
+.ee-title-input { height: 40px; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; font-weight: 500; width: 100%; }
+.ee-title-input::placeholder { color: var(--faint); }
+.ee-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ee-icon { flex: none; display: flex; color: var(--muted); }
+.ee-icon svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+.ee-row input[type="text"], .ee-row input[type="email"], .ee-row input[type="date"], .ee-row input[type="time"], .ee-row input[type="number"], .ee-row select, .ee-row textarea { height: 36px; padding: 0 10px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.ee-row select:disabled { color: var(--muted); opacity: .85; }
+.ee-row textarea { height: auto; min-height: 64px; padding: 8px 10px; width: 100%; resize: vertical; }
+.ee-dash { color: var(--faint); }
+.ee-allday { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+.ee-meet-toggle { height: 36px; padding: 0 12px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.ee-meet-toggle[aria-pressed="true"] { background: var(--wk-bg); color: var(--wk-ink); border-color: var(--wk-accent); }
+.ee-description { align-items: flex-start; }
+.ee-description textarea { flex: 1; min-width: 0; }
+.ee-guests { align-items: flex-start; }
+.ee-guests-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.guest-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.guest-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border-radius: 999px; background: var(--raised); color: var(--text); font-size: 12px; font-weight: 500; }
+.guest-chip button { width: 18px; height: 18px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
+.guest-chip button:hover { background: var(--active); color: var(--text); }
+.guest-add { display: flex; gap: 6px; }
+.guest-add input { flex: 1; min-width: 0; }
+.guest-add button { height: 36px; padding: 0 12px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.ee-permissions { align-items: flex-start; }
+.ee-permissions-body { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text); }
+.ee-permissions-body label { display: flex; align-items: center; gap: 8px; }
+.ee-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.ee-spacer { flex: 1; }
+.ee-delete { height: 38px; padding: 0 16px; border: 1px solid var(--negative); border-radius: 999px; background: transparent; color: var(--negative); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; }
+.ee-cancel { height: 38px; padding: 0 16px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; }
+.ee-save { height: 38px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--text); color: var(--ground); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; }
+.ee-save:disabled, .ee-delete:disabled { opacity: .6; cursor: progress; }
+
+/* ---- color picker (Task 3): the shared 6-swatch picker used by Event (and, later, Task) editors ---- */
+.color-picker { display: flex; gap: 8px; }
+.color-swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+.color-swatch.cal { background: var(--cal-accent); }
+.color-swatch.wk { background: var(--wk-accent); }
+.color-swatch.rem { background: var(--rem-accent); }
+.color-swatch.note { background: var(--note-accent); }
+.color-swatch.jour { background: var(--jour-accent); }
+.color-swatch.cv { background: var(--cv-accent); }
+.color-swatch[aria-checked="true"] { border-color: var(--text); }
 
 /* ---- error / reconnect banner states (ported from .taste-skill/build/home-error.html) ---- */
 .error-block { display: flex; align-items: center; gap: 8px; padding: 18px 0; color: var(--text); font-size: 13px; flex-wrap: wrap; }

@@ -1,10 +1,27 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { createEvent, deleteEvent, listCalendars, listEvents, updateEvent } from "../../lib/google-calendar";
+import {
+  createEvent,
+  deleteEvent,
+  filterWritableCalendars,
+  listCalendars,
+  listEvents,
+  updateEvent,
+} from "../../lib/google-calendar";
 
 /** The stubbed global `fetch`'s recorded calls, as `[url, init]` pairs. */
 function fetchCalls(): [string, { body: string }][] {
   return (fetch as unknown as { mock: { calls: [string, { body: string }][] } }).mock.calls;
+}
+
+/**
+ * The first recorded request's URL split into its path and its parsed query,
+ * so a test can assert on query params without caring what order they were
+ * serialized in.
+ */
+function requestedUrl(): { path: string; params: URLSearchParams } {
+  const url = new URL(fetchCalls()[0][0]);
+  return { path: `${url.origin}${url.pathname}`, params: url.searchParams };
 }
 
 afterEach(() => {
@@ -64,10 +81,14 @@ test("createEvent POSTs to the calendar's events endpoint and returns the create
   });
 
   expect(result.calendarId).toBe("primary");
-  expect(fetch).toHaveBeenCalledWith(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-    expect.objectContaining({ method: "POST" }),
-  );
+  expect(fetchCalls()[0][1]).toMatchObject({ method: "POST" });
+
+  const { path, params } = requestedUrl();
+  expect(path).toBe("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+  // Google's default is sendUpdates=none, which adds guests without ever
+  // emailing them an invite — so every write sends it unconditionally.
+  expect(params.get("sendUpdates")).toBe("all");
+  expect(params.get("conferenceDataVersion")).toBeNull();
 });
 
 test("createEvent requests conferenceDataVersion=1 when conferenceData.createRequest is set", async () => {
@@ -89,10 +110,29 @@ test("createEvent requests conferenceDataVersion=1 when conferenceData.createReq
     conferenceData: { createRequest: { requestId: "req1" } },
   });
 
-  expect(fetch).toHaveBeenCalledWith(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1",
-    expect.objectContaining({ method: "POST" }),
-  );
+  // Both params have to coexist on the same URL, correctly formed — this is
+  // the case where the unconditional sendUpdates and the conditional
+  // conferenceDataVersion meet.
+  const { path, params } = requestedUrl();
+  expect(path).toBe("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+  expect(params.get("conferenceDataVersion")).toBe("1");
+  expect(params.get("sendUpdates")).toBe("all");
+});
+
+test("createEvent sends sendUpdates=all when the event has attendees, so Google actually mails the invites", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ id: "new3", summary: "Lunch" }),
+  }));
+
+  await createEvent("tok", "primary", {
+    summary: "Lunch",
+    start: { dateTime: "2026-10-22T12:00:00-04:00" },
+    end: { dateTime: "2026-10-22T13:00:00-04:00" },
+    attendees: [{ email: "friend@example.com" }],
+  });
+
+  expect(requestedUrl().params.get("sendUpdates")).toBe("all");
 });
 
 test("updateEvent PATCHes the specific event", async () => {
@@ -112,10 +152,13 @@ test("updateEvent PATCHes the specific event", async () => {
   });
 
   expect(result.calendarId).toBe("primary");
-  expect(fetch).toHaveBeenCalledWith(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1",
-    expect.objectContaining({ method: "PATCH" }),
-  );
+  expect(fetchCalls()[0][1]).toMatchObject({ method: "PATCH" });
+
+  const { path, params } = requestedUrl();
+  expect(path).toBe("https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1");
+  // A guest added on an *edit* has to be mailed too, not just one present at
+  // creation time.
+  expect(params.get("sendUpdates")).toBe("all");
 });
 
 test("updateEvent requests conferenceDataVersion=1 when clearing conferenceData with an explicit null", async () => {
@@ -128,10 +171,10 @@ test("updateEvent requests conferenceDataVersion=1 when clearing conferenceData 
   // including removing an existing Meet link.
   await updateEvent("tok", "primary", "evt1", { conferenceData: null });
 
-  expect(fetch).toHaveBeenCalledWith(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1?conferenceDataVersion=1",
-    expect.objectContaining({ method: "PATCH" }),
-  );
+  const { path, params } = requestedUrl();
+  expect(path).toBe("https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1");
+  expect(params.get("conferenceDataVersion")).toBe("1");
+  expect(params.get("sendUpdates")).toBe("all");
   expect(JSON.parse(fetchCalls()[0][1].body).conferenceData).toBeNull();
 });
 
@@ -162,14 +205,28 @@ test("deleteEvent DELETEs the specific event", async () => {
 
   await deleteEvent("tok", "primary", "evt1");
 
-  expect(fetch).toHaveBeenCalledWith(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1",
-    expect.objectContaining({ method: "DELETE" }),
-  );
+  expect(fetchCalls()[0][1]).toMatchObject({ method: "DELETE" });
+
+  const { path, params } = requestedUrl();
+  expect(path).toBe("https://www.googleapis.com/calendar/v3/calendars/primary/events/evt1");
+  // Deleting an event with guests should mail Google's own cancellation
+  // notice, not just silently remove it from their calendars.
+  expect(params.get("sendUpdates")).toBe("all");
 });
 
 test("deleteEvent throws on a non-ok response", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
 
   await expect(deleteEvent("tok", "primary", "evt1")).rejects.toThrow();
+});
+
+test("filterWritableCalendars keeps owner and writer calendars, drops reader and freeBusyReader, and keeps an entry with no accessRole at all", () => {
+  const calendars = [
+    { id: "a", summary: "Primary", backgroundColor: "#000", accessRole: "owner" as const },
+    { id: "b", summary: "Shared", backgroundColor: "#000", accessRole: "writer" as const },
+    { id: "c", summary: "Holidays", backgroundColor: "#000", accessRole: "reader" as const },
+    { id: "d", summary: "Someone's free/busy", backgroundColor: "#000", accessRole: "freeBusyReader" as const },
+    { id: "e", summary: "Legacy entry", backgroundColor: "#000" },
+  ];
+  expect(filterWritableCalendars(calendars).map((c) => c.id)).toEqual(["a", "b", "e"]);
 });

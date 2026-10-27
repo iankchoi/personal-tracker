@@ -1,29 +1,27 @@
+"use client";
+
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   MONTH_NAMES_FULL,
   WEEKDAY_NAMES_FULL,
   addDays,
-  eventStart,
-  eventStartDay,
-  formatDateParam,
   formatTimeLabel,
   isSameLocalDay,
 } from "@/lib/calendar-dates";
+import { getEventsForDay, getTasksForDay } from "@/lib/calendar-day-items";
+import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import { getViewRange } from "@/lib/calendar-ranges";
-import { getAllDayEvents } from "@/lib/calendar-layout";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent, GoogleCalendarListEntry } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import { CalendarsLegend } from "./CalendarsLegend";
+import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { MiniMonth } from "./MiniMonth";
 import { TaskCheckbox } from "./TaskCheckbox";
 
 /** Length of the agenda window, matching `getViewRange("agenda", ...)` in lib/calendar-ranges.ts. */
 const AGENDA_WINDOW_DAYS = 14;
-
-/** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
-const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
 
 /**
  * Agenda's day-group heading, matching the mockup: "Today"/"Tomorrow" for
@@ -53,29 +51,6 @@ function formatGroupSub(day: Date, today: Date): string {
 }
 
 /**
- * All events (all-day or timed) that fall on `day`, all-day events first and
- * timed events sorted chronologically — mirrors `MonthView`'s
- * `getEventsForDay`. The sort is explicit because `events` may combine
- * multiple calendars whose individual lists are each sorted but whose merge
- * is not guaranteed to be. Day membership comes from `eventStartDay`, which
- * reads each event's own offset rather than the server's timezone (see
- * lib/calendar-dates.ts).
- */
-function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalendarEvent[] {
-  const allDay = getAllDayEvents(events, day);
-  const timed = events
-    .filter((event) => event.start.dateTime && isSameLocalDay(eventStartDay(event), day))
-    .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime());
-  return [...allDay, ...timed];
-}
-
-/** Tasks due on `day`, mirroring `MonthView`'s sibling helper of the same name. */
-function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[] {
-  const dayParam = formatDateParam(day);
-  return tasks.filter((task) => task.dueDate === dayParam);
-}
-
-/**
  * Agenda view: ports the mockup's `.agenda-layout` — an `.agenda-col` of
  * `.agenda-group`s (one per day in the 14-day agenda window that has at
  * least one event; days with zero events are skipped entirely, matching the
@@ -92,8 +67,9 @@ function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[
  * Color mapping follows the same convention as `HourGrid`/`MonthView`:
  * `app/globals.css`'s `.src` modifier classes (`.src.cal`/`.wk`/`.rem`/
  * `.note`/`.jour`/`.cv`) are keyed one-to-one with `CalendarColorToken`
- * values, so the token string from `colorByCalendar` is used directly as
- * the row's `.src` class name.
+ * values, so the token string from `resolveEventColorToken` — the event's own
+ * `colorId` override when it has one, its calendar's assigned color otherwise
+ * — is used directly as the row's `.src` class name.
  *
  * `tasks` due on each day are merged into that same day's group (rendered
  * after its event rowcards, per Task 7's "implementer's call" on ordering)
@@ -118,6 +94,7 @@ export function AgendaView({
   tasks?: CalendarTaskItem[];
   taskLists?: GoogleTaskList[];
 }) {
+  const { openEditEvent, openEditTask } = useCalendarInteraction();
   const { start, end } = getViewRange("agenda", referenceDate);
   const days = Array.from({ length: AGENDA_WINDOW_DAYS }, (_, index) => addDays(start, index));
   const calendarNameById = new Map(calendars.map((calendar) => [calendar.id, calendar.summary]));
@@ -140,12 +117,12 @@ export function AgendaView({
               </div>
               <div className="cards">
                 {dayEvents.map((event) => {
-                  const colorToken = colorByCalendar[event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+                  const colorToken = resolveEventColorToken(event, colorByCalendar);
                   const timeLabel = event.start.dateTime ? formatTimeLabel(event.start.dateTime) : "All day";
                   const calendarName = calendarNameById.get(event.calendarId) ?? "";
 
                   return (
-                    <div className="rowcard" key={event.id}>
+                    <div className="rowcard" key={event.id} onClick={() => openEditEvent(event)}>
                       <span className="time">{timeLabel}</span>
                       <span className="title">{event.summary}</span>
                       <span className={`src ${colorToken}`}>{calendarName}</span>
@@ -153,7 +130,7 @@ export function AgendaView({
                   );
                 })}
                 {dayTasks.map((task) => (
-                  <TaskCheckbox key={task.id} task={task} />
+                  <TaskCheckbox key={task.id} task={task} onTitleClick={openEditTask} />
                 ))}
               </div>
             </div>

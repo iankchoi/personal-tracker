@@ -4,6 +4,7 @@ import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
   buildWeeks,
+  formatTimeLabel,
   isSameLocalDay,
   isSameLocalMonth,
 } from "@/lib/calendar-dates";
@@ -109,6 +110,9 @@ export function MonthView({
                             className={`mg-chip ${colorToken}`}
                             onClick={() => openEditEvent(entry.event)}
                           >
+                            {entry.event.start.dateTime && (
+                              <span className="mg-chip-time">{formatTimeLabel(entry.event.start.dateTime)}</span>
+                            )}
                             {entry.event.summary}
                           </span>
                         );

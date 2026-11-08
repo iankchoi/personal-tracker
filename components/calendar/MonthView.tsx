@@ -1,14 +1,25 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { useState, type DragEvent } from "react";
+
+import { updateEventAction } from "@/lib/actions/calendar-events";
+import { updateTaskAction } from "@/lib/actions/calendar-tasks";
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
   buildWeeks,
+  eventStartDay,
+  formatDateParam,
   formatTimeLabel,
   isSameLocalDay,
   isSameLocalMonth,
 } from "@/lib/calendar-dates";
+import type { EventActionInput } from "@/lib/actions/calendar-events";
+import type { TaskActionInput } from "@/lib/actions/calendar-tasks";
 import { getEventsForDay, getTasksForDay } from "@/lib/calendar-day-items";
+import { shiftEventToDay, shiftTaskToDay } from "@/lib/calendar-drag";
+import { calendarTaskToEditorInitial, googleEventToEditorInitial } from "@/lib/calendar-event-task-mapping";
 import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
@@ -16,6 +27,9 @@ import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
+
+/** What's currently being dragged, set on `dragstart` and read back on `drop` — native HTML5 DnD carries no typed payload of its own, so this app-level state stands in for `dataTransfer`. */
+type DragPayload = { kind: "event"; event: GoogleCalendarEvent } | { kind: "task"; task: CalendarTaskItem };
 
 /** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. Tasks count as chips too. */
 const MAX_VISIBLE_CHIPS = 3;
@@ -63,9 +77,54 @@ export function MonthView({
 }) {
   const weeks = buildWeeks(referenceDate);
   const { openCreate, openDayDetail, openEditEvent, openEditTask } = useCalendarInteraction();
+  const router = useRouter();
+  const [dragPayload, setDragPayload] = useState<DragPayload | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<number | null>(null);
+  const [dragError, setDragError] = useState<string | null>(null);
+
+  async function handleDrop(day: Date) {
+    setDragOverDay(null);
+    const payload = dragPayload;
+    setDragPayload(null);
+    if (!payload) {
+      return;
+    }
+
+    if (payload.kind === "event") {
+      if (isSameLocalDay(eventStartDay(payload.event), day)) {
+        return;
+      }
+      const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
+      try {
+        await updateEventAction({ ...mapped, ...shiftEventToDay(payload.event, day) });
+        router.refresh();
+      } catch {
+        setDragError("Couldn't reschedule that event.");
+      }
+    } else {
+      if (formatDateParam(day) === payload.task.dueDate) {
+        return;
+      }
+      const mapped = calendarTaskToEditorInitial(payload.task) as TaskActionInput & { taskId: string };
+      try {
+        await updateTaskAction({ ...mapped, ...shiftTaskToDay(payload.task, day) });
+        router.refresh();
+      } catch {
+        setDragError("Couldn't reschedule that task.");
+      }
+    }
+  }
 
   return (
     <div className="month-grid">
+      {dragError && (
+        <div className="error-block" role="alert">
+          {dragError}
+          <button type="button" onClick={() => setDragError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="mg-dow-row">
         {WEEKDAY_NAMES_UPPER.map((name) => (
           <div className="mg-dow" key={name}>
@@ -89,9 +148,21 @@ export function MonthView({
               const classes = ["mg-cell"];
               if (!isSameLocalMonth(day, referenceDate)) classes.push("outside");
               if (isSameLocalDay(day, today)) classes.push("today");
+              if (dragOverDay === day.getTime()) classes.push("drag-over");
 
               return (
-                <div className={classes.join(" ")} key={day.getTime()} onClick={() => openCreate("event", day)}>
+                <div
+                  className={classes.join(" ")}
+                  key={day.getTime()}
+                  onClick={() => openCreate("event", day)}
+                  onDragEnter={() => setDragOverDay(day.getTime())}
+                  onDragLeave={() => setDragOverDay((current) => (current === day.getTime() ? null : current))}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void handleDrop(day);
+                  }}
+                >
                   <span className="mg-date">{day.getDate()}</span>
                   {entries.length > 0 && (
                     // `stopPropagation` keeps a chip/task click from also
@@ -101,13 +172,23 @@ export function MonthView({
                     <div className="mg-events" onClick={(event) => event.stopPropagation()}>
                       {visibleEntries.map((entry) => {
                         if (entry.kind === "task") {
-                          return <TaskCheckbox key={entry.task.id} task={entry.task} onTitleClick={openEditTask} />;
+                          return (
+                            <TaskCheckbox
+                              key={entry.task.id}
+                              task={entry.task}
+                              onTitleClick={openEditTask}
+                              draggable
+                              onDragStart={() => setDragPayload({ kind: "task", task: entry.task })}
+                            />
+                          );
                         }
                         const colorToken = resolveEventColorToken(entry.event, colorByCalendar);
                         return (
                           <span
                             key={entry.event.id}
                             className={`mg-chip ${colorToken}`}
+                            draggable
+                            onDragStart={() => setDragPayload({ kind: "event", event: entry.event })}
                             onClick={() => openEditEvent(entry.event)}
                           >
                             {entry.event.start.dateTime && (

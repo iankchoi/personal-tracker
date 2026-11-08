@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type DragEvent } from "react";
 
 import { completeTaskAction } from "../../lib/actions/calendar-tasks";
 import type { CalendarColorToken } from "../../lib/calendar-colors";
@@ -61,9 +61,21 @@ function formatTaskTime(dueTime: string): string {
 export function TaskCheckbox({
   task,
   onTitleClick,
+  draggable,
+  onDragStart,
 }: {
   task: CalendarTaskItem;
   onTitleClick?(task: CalendarTaskItem): void;
+  /**
+   * Opt-in drag source for callers that support drag-to-reschedule (Month
+   * view's day cells, the Week/Day hour grid's columns). Applied to the
+   * title `<span>` rather than the outer `<label>` — the title is a direct
+   * sibling of the checkbox `<input>`, never its ancestor, so a caller that
+   * doesn't pass these props (e.g. `AgendaView`) gets no draggable element
+   * at all, and one that does never makes the checkbox itself draggable.
+   */
+  draggable?: boolean;
+  onDragStart?(event: DragEvent<HTMLSpanElement>): void;
 }) {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);
@@ -100,6 +112,8 @@ export function TaskCheckbox({
       />
       <span
         className={task.completed ? "task-title task-done" : "task-title"}
+        draggable={draggable}
+        onDragStart={onDragStart}
         onClick={
           onTitleClick
             ? (event) => {

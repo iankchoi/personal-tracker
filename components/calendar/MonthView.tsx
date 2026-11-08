@@ -1,70 +1,43 @@
+"use client";
+
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
   buildWeeks,
-  eventStart,
-  eventStartDay,
-  formatDateParam,
   isSameLocalDay,
   isSameLocalMonth,
 } from "@/lib/calendar-dates";
-import { getAllDayEvents } from "@/lib/calendar-layout";
+import { getEventsForDay, getTasksForDay } from "@/lib/calendar-day-items";
+import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
+import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
 
 /** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. Tasks count as chips too. */
 const MAX_VISIBLE_CHIPS = 3;
 
-/** Fallback color token used if a rendered event's calendarId is somehow missing from colorByCalendar. */
-const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
-
 /** A cell's event chips and task checkboxes merged into one orderable list, so overflow counting (`MAX_VISIBLE_CHIPS`) treats both uniformly. */
 type DayEntry = { kind: "event"; event: GoogleCalendarEvent } | { kind: "task"; task: CalendarTaskItem };
-
-/**
- * All events (all-day or timed) that fall on `day`, all-day events first and
- * timed events sorted chronologically — mirrors `AgendaView`'s
- * `getEventsForDay`. The sort matters here as much as there: `events` merges
- * one list per calendar, each individually sorted by Google but whose
- * concatenation is not, so without it a multi-calendar day's chip order —
- * and therefore which chips land inside `MAX_VISIBLE_CHIPS` versus behind
- * "+N more" — would follow arbitrary fetch order rather than the clock.
- *
- * Unlike `layoutTimedEvents` (used by the hour grid), this does not restrict
- * timed events to the Day/Week grid's fixed hour window — Month view shows
- * every event regardless of time of day. Day membership comes from
- * `eventStartDay`, which reads each event's own offset rather than the
- * server's timezone (see lib/calendar-dates.ts).
- */
-function getEventsForDay(events: GoogleCalendarEvent[], day: Date): GoogleCalendarEvent[] {
-  const allDay = getAllDayEvents(events, day);
-  const timed = events
-    .filter((event) => event.start.dateTime && isSameLocalDay(eventStartDay(event), day))
-    .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime());
-  return [...allDay, ...timed];
-}
-
-/** Tasks due on `day`, mirroring `AgendaView`'s sibling helper of the same name. */
-function getTasksForDay(tasks: CalendarTaskItem[], day: Date): CalendarTaskItem[] {
-  const dayParam = formatDateParam(day);
-  return tasks.filter((task) => task.dueDate === dayParam);
-}
 
 /**
  * Month view: ports the mockup's `.month-grid`/`.mg-dow-row`/`.mg-weeks`/
  * `.mg-week`/`.mg-cell` markup. Leading/trailing days from adjacent months
  * are rendered grayed-out (`.mg-cell.outside`) rather than left empty, and
  * each cell caps its visible event chips at `MAX_VISIBLE_CHIPS`, collapsing
- * any remainder into a `.mg-more` "+N more" (display-only — no click
- * handler, per this plan's read-only scope).
+ * any remainder into a `.mg-more` "+N more" button that opens the day-detail
+ * overlay (`openDayDetail`) listing that day's complete events and tasks —
+ * Google Calendar's own month-view behavior. It was display-only under the
+ * original read-only scope.
  *
  * Color mapping follows Task 7/8's precedent: `app/globals.css` already
  * defines one `.mg-chip` modifier class per `CalendarColorToken`
  * (`.mg-chip.cal`/`.wk`/`.rem`/`.note`/`.jour`/`.cv`), so the token string
- * returned by `colorByCalendar` is used directly as the chip's class name.
+ * returned by `resolveEventColorToken` — the event's own `colorId` override
+ * when it has one, its calendar's assigned color otherwise — is used directly
+ * as the chip's class name.
  *
  * `tasks` due on each day are merged into that same cell (after its event
  * chips, per Task 7's "implementer's call" on ordering) and rendered via
@@ -88,6 +61,7 @@ export function MonthView({
   taskLists?: GoogleTaskList[];
 }) {
   const weeks = buildWeeks(referenceDate);
+  const { openCreate, openDayDetail, openEditEvent, openEditTask } = useCalendarInteraction();
 
   return (
     <div className="month-grid">
@@ -116,22 +90,43 @@ export function MonthView({
               if (isSameLocalDay(day, today)) classes.push("today");
 
               return (
-                <div className={classes.join(" ")} key={day.getTime()}>
+                <div className={classes.join(" ")} key={day.getTime()} onClick={() => openCreate("event", day)}>
                   <span className="mg-date">{day.getDate()}</span>
                   {entries.length > 0 && (
-                    <div className="mg-events">
+                    // `stopPropagation` keeps a chip/task click from also
+                    // bubbling up into the cell's own click-to-create
+                    // handler above — the brief's "onClick on the cell
+                    // background (not on its chips)".
+                    <div className="mg-events" onClick={(event) => event.stopPropagation()}>
                       {visibleEntries.map((entry) => {
                         if (entry.kind === "task") {
-                          return <TaskCheckbox key={entry.task.id} task={entry.task} />;
+                          return <TaskCheckbox key={entry.task.id} task={entry.task} onTitleClick={openEditTask} />;
                         }
-                        const colorToken = colorByCalendar[entry.event.calendarId] ?? FALLBACK_COLOR_TOKEN;
+                        const colorToken = resolveEventColorToken(entry.event, colorByCalendar);
                         return (
-                          <span key={entry.event.id} className={`mg-chip ${colorToken}`}>
+                          <span
+                            key={entry.event.id}
+                            className={`mg-chip ${colorToken}`}
+                            onClick={() => openEditEvent(entry.event)}
+                          >
                             {entry.event.summary}
                           </span>
                         );
                       })}
-                      {overflowCount > 0 && <div className="mg-more">+{overflowCount} more</div>}
+                      {overflowCount > 0 && (
+                        // A real <button>, not the original presentational
+                        // <div>: it's now the entry point to the day-detail
+                        // overlay, so it has to be keyboard-reachable and
+                        // announced as a control. `type="button"` keeps it from
+                        // ever submitting a form it might one day sit inside.
+                        <button
+                          type="button"
+                          className="mg-more"
+                          onClick={() => openDayDetail(day)}
+                        >
+                          +{overflowCount} more
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

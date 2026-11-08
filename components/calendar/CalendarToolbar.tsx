@@ -4,6 +4,9 @@ import { useRouter } from "next/navigation";
 
 import { getViewRange, navigateDate, type ViewType } from "@/lib/calendar-ranges";
 
+import { CalendarShortcuts } from "./CalendarShortcuts";
+import { useCalendarInteraction } from "./CalendarInteractionProvider";
+
 const VIEW_OPTIONS: { view: ViewType; label: string }[] = [
   { view: "day", label: "Day" },
   { view: "week", label: "Week" },
@@ -30,6 +33,7 @@ function formatDateParam(date: Date): string {
  */
 export function CalendarToolbar({ view, date }: { view: ViewType; date: Date }) {
   const router = useRouter();
+  const { openCreate } = useCalendarInteraction();
   const { label } = getViewRange(view, date);
 
   function go(nextView: ViewType, nextDate: Date) {
@@ -38,6 +42,7 @@ export function CalendarToolbar({ view, date }: { view: ViewType; date: Date }) 
 
   return (
     <div className="cal-toolbar">
+      <CalendarShortcuts view={view} date={date} go={go} />
       <h1>Calendar</h1>
       <div className="segmented" role="tablist">
         {VIEW_OPTIONS.map((option) => (
@@ -76,7 +81,7 @@ export function CalendarToolbar({ view, date }: { view: ViewType; date: Date }) 
         Today
       </button>
       <div className="cal-spacer" />
-      <button className="cal-new" disabled>
+      <button className="cal-new" type="button" onClick={() => openCreate("event", date)}>
         + New event
       </button>
     </div>

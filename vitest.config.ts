@@ -1,8 +1,17 @@
+import { fileURLToPath } from "node:url";
+
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  // Mirrors tsconfig.json's `"@/*": ["./*"]` path mapping, which Next resolves
+  // in the app but Vite knows nothing about on its own. Needed as soon as a
+  // test imports a component that itself imports via `@/...` — e.g.
+  // `CalendarInteractionProvider` -> `@/lib/google-calendar`.
+  resolve: {
+    alias: { "@": fileURLToPath(new URL(".", import.meta.url)) },
+  },
   test: {
     environment: "node",
     setupFiles: ["./tests/setup.ts"],

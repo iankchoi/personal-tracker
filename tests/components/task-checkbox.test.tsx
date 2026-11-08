@@ -111,6 +111,32 @@ test("the checkbox is re-enabled after a failed toggle so the user can retry", a
   consoleError.mockRestore();
 });
 
+test("clicking the title text calls onTitleClick with the task and does not toggle completion", () => {
+  const onTitleClick = vi.fn();
+  const task = { ...baseTask, completed: false };
+  render(<TaskCheckbox task={task} onTitleClick={onTitleClick} />);
+
+  fireEvent.click(screen.getByText(task.title));
+
+  expect(onTitleClick).toHaveBeenCalledWith(task);
+  expect(mockCompleteTaskAction).not.toHaveBeenCalled();
+  expect(screen.getByRole("checkbox")).not.toBeChecked();
+});
+
+test("clicking the checkbox toggles completion as before, and does not call onTitleClick", () => {
+  const onTitleClick = vi.fn();
+  render(<TaskCheckbox task={{ ...baseTask, completed: false }} onTitleClick={onTitleClick} />);
+
+  fireEvent.click(screen.getByRole("checkbox"));
+
+  expect(mockCompleteTaskAction).toHaveBeenCalledWith({
+    taskListId: baseTask.taskListId,
+    taskId: baseTask.id,
+    completed: true,
+  });
+  expect(onTitleClick).not.toHaveBeenCalled();
+});
+
 test("the checkbox is disabled while the toggle is in flight, so a double-click can't fire two overlapping actions", async () => {
   let resolveAction: (() => void) | undefined;
   mockCompleteTaskAction.mockImplementation(

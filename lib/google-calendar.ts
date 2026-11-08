@@ -51,6 +51,23 @@ export async function listCalendars(accessToken: string): Promise<GoogleCalendar
 }
 
 /**
+ * Narrows a calendar list down to the ones the user can actually write to —
+ * `owner` or `writer` `accessRole`, or no `accessRole` at all (an older/
+ * legacy calendarList entry that predates Google annotating this field,
+ * treated as writable rather than excluded by default). Drops `reader` and
+ * `freeBusyReader` entries (e.g. a read-only subscribed Holidays calendar).
+ *
+ * Used to scope the quick-create popup's calendar picker: offering a
+ * read-only calendar there would let the user pick it and hit Save only to
+ * get an unhelpful 403 back from Google.
+ */
+export function filterWritableCalendars(calendars: GoogleCalendarListEntry[]): GoogleCalendarListEntry[] {
+  return calendars.filter(
+    (calendar) => !calendar.accessRole || calendar.accessRole === "owner" || calendar.accessRole === "writer",
+  );
+}
+
+/**
  * Fetches events for a single calendar within a time range. `singleEvents=true`
  * expands recurring events into concrete instances, and `orderBy=startTime`
  * returns them in chronological order. Google's response omits `calendarId`
@@ -99,21 +116,50 @@ export type GoogleCalendarEventWrite = Partial<Omit<GoogleCalendarEvent, "colorI
 };
 
 /**
- * Creates a new event in the specified calendar. If the event includes
- * `conferenceData.createRequest`, appends `conferenceDataVersion=1` to the
- * request URL as required by Google's API. Stamps `calendarId` onto the
- * returned object. Throws on a non-ok response.
+ * The query string every event write carries.
+ *
+ * `sendUpdates=all` is the whole point: Google's default for
+ * `events.insert`/`patch`/`delete` is `sendUpdates=none`, so an event written
+ * with `attendees` set *did* add the guests (they show up in Google Calendar's
+ * own UI) but Google never emailed them an invite — the design's "guest invites
+ * use the real mechanism… nothing to build beyond passing the right field" was
+ * one query param short of true.
+ *
+ * It's unconditional rather than gated on `attendees` being present, because
+ * Google accepts the parameter on any write and it costs nothing when there are
+ * no guests to notify — whereas gating it would mean every new notification
+ * path (adding a guest on an *edit*, deleting an event that has guests) had to
+ * remember to re-derive the condition correctly. For a personal app where every
+ * write should notify whoever is actually on the event, "always notify" is the
+ * right default.
+ *
+ * Returned as `URLSearchParams` so callers that also need
+ * `conferenceDataVersion=1` can just `set` it on top and serialize once, rather
+ * than hand-splicing a second `?`-vs-`&` into the string.
+ */
+function eventWriteParams(): URLSearchParams {
+  return new URLSearchParams({ sendUpdates: "all" });
+}
+
+/**
+ * Creates a new event in the specified calendar. Always sends
+ * `sendUpdates=all` (see `eventWriteParams`), and adds
+ * `conferenceDataVersion=1` when the event includes
+ * `conferenceData.createRequest`, as required by Google's API. Stamps
+ * `calendarId` onto the returned object. Throws on a non-ok response.
  */
 export async function createEvent(
   accessToken: string,
   calendarId: string,
   event: GoogleCalendarEventWrite,
 ): Promise<GoogleCalendarEvent> {
-  let url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+  const params = eventWriteParams();
 
   if (event.conferenceData?.createRequest) {
-    url += "?conferenceDataVersion=1";
+    params.set("conferenceDataVersion", "1");
   }
+
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -136,11 +182,14 @@ export async function createEvent(
  * Updates an existing event in the specified calendar. Stamps `calendarId`
  * onto the returned object. Throws on a non-ok response.
  *
- * Appends `conferenceDataVersion=1` whenever the patch mentions
- * `conferenceData` at all — matching `createEvent`'s conditional append, but
- * widened to cover an explicit `null` as well, since Google requires that
- * query param for *any* conferenceData write, clearing a Meet link included.
- * A patch that omits the field entirely leaves the URL untouched.
+ * Always sends `sendUpdates=all` (see `eventWriteParams`) so a guest added —
+ * or removed — on an *edit* gets notified, not just one present at creation.
+ *
+ * Adds `conferenceDataVersion=1` whenever the patch mentions `conferenceData`
+ * at all — matching `createEvent`'s conditional, but widened to cover an
+ * explicit `null` as well, since Google requires that query param for *any*
+ * conferenceData write, clearing a Meet link included. A patch that omits the
+ * field entirely leaves it off.
  */
 export async function updateEvent(
   accessToken: string,
@@ -148,11 +197,13 @@ export async function updateEvent(
   eventId: string,
   patch: GoogleCalendarEventWrite,
 ): Promise<GoogleCalendarEvent> {
-  let url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+  const params = eventWriteParams();
 
   if (patch.conferenceData !== undefined) {
-    url += "?conferenceDataVersion=1";
+    params.set("conferenceDataVersion", "1");
   }
+
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?${params.toString()}`;
 
   const response = await fetch(url, {
     method: "PATCH",
@@ -173,13 +224,17 @@ export async function updateEvent(
 
 /**
  * Deletes an event from the specified calendar. Throws on a non-ok response.
+ *
+ * Also sends `sendUpdates=all` (see `eventWriteParams`), so deleting an event
+ * with guests mails them Google's own cancellation notice instead of silently
+ * vanishing from their calendars.
  */
 export async function deleteEvent(
   accessToken: string,
   calendarId: string,
   eventId: string,
 ): Promise<void> {
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?${eventWriteParams().toString()}`;
 
   const response = await fetch(url, {
     method: "DELETE",

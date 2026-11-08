@@ -63,6 +63,7 @@ export function TaskCheckbox({
   onTitleClick,
   draggable,
   onDragStart,
+  onDragEnd,
 }: {
   task: CalendarTaskItem;
   onTitleClick?(task: CalendarTaskItem): void;
@@ -76,6 +77,8 @@ export function TaskCheckbox({
    */
   draggable?: boolean;
   onDragStart?(event: DragEvent<HTMLSpanElement>): void;
+  /** Fires on drag end (drop or cancel) regardless of outcome — callers use this to clear any "what's being dragged" state so an aborted drag can't be picked up by a later, unrelated drop. */
+  onDragEnd?(event: DragEvent<HTMLSpanElement>): void;
 }) {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);
@@ -114,6 +117,7 @@ export function TaskCheckbox({
         className={task.completed ? "task-title task-done" : "task-title"}
         draggable={draggable}
         onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
         onClick={
           onTitleClick
             ? (event) => {

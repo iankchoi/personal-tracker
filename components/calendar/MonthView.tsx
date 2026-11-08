@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type DragEvent } from "react";
+import { useState } from "react";
 
 import { updateEventAction } from "@/lib/actions/calendar-events";
 import { updateTaskAction } from "@/lib/actions/calendar-tasks";
@@ -9,7 +9,6 @@ import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
   buildWeeks,
-  eventStartDay,
   formatDateParam,
   formatTimeLabel,
   isSameLocalDay,
@@ -18,7 +17,7 @@ import {
 import type { EventActionInput } from "@/lib/actions/calendar-events";
 import type { TaskActionInput } from "@/lib/actions/calendar-tasks";
 import { getEventsForDay, getTasksForDay } from "@/lib/calendar-day-items";
-import { shiftEventToDay, shiftTaskToDay } from "@/lib/calendar-drag";
+import { shiftEventToDay, shiftTaskToDay, withoutEventClobberFields } from "@/lib/calendar-drag";
 import { calendarTaskToEditorInitial, googleEventToEditorInitial } from "@/lib/calendar-event-task-mapping";
 import { resolveEventColorToken } from "@/lib/calendar-event-colors";
 import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
@@ -28,8 +27,19 @@ import type { GoogleTaskList } from "@/lib/google-tasks";
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
 
-/** What's currently being dragged, set on `dragstart` and read back on `drop` — native HTML5 DnD carries no typed payload of its own, so this app-level state stands in for `dataTransfer`. */
-type DragPayload = { kind: "event"; event: GoogleCalendarEvent } | { kind: "task"; task: CalendarTaskItem };
+/**
+ * What's currently being dragged, set on `dragstart` and read back on
+ * `drop` — native HTML5 DnD carries no typed payload of its own, so this
+ * app-level state stands in for `dataTransfer`. `grabDay` is the day whose
+ * *cell* the drag actually started from — a multi-day all-day event renders
+ * a chip in every day it spans, so this is not always the event's own start
+ * day, and `shiftEventToDay` needs the real grab point to nudge the event by
+ * the gesture's actual day delta instead of re-anchoring its start on the
+ * drop target.
+ */
+type DragPayload =
+  | { kind: "event"; event: GoogleCalendarEvent; grabDay: Date }
+  | { kind: "task"; task: CalendarTaskItem };
 
 /** Maximum number of event chips shown per cell before collapsing into a "+N more" summary. Tasks count as chips too. */
 const MAX_VISIBLE_CHIPS = 3;
@@ -91,12 +101,16 @@ export function MonthView({
     }
 
     if (payload.kind === "event") {
-      if (isSameLocalDay(eventStartDay(payload.event), day)) {
+      if (isSameLocalDay(payload.grabDay, day)) {
         return;
       }
       const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
       try {
-        await updateEventAction({ ...mapped, ...shiftEventToDay(payload.event, day) });
+        await updateEventAction({
+          ...withoutEventClobberFields(mapped),
+          ...shiftEventToDay(payload.event, payload.grabDay, day),
+        });
+        setDragError(null);
         router.refresh();
       } catch {
         setDragError("Couldn't reschedule that event.");
@@ -108,6 +122,7 @@ export function MonthView({
       const mapped = calendarTaskToEditorInitial(payload.task) as TaskActionInput & { taskId: string };
       try {
         await updateTaskAction({ ...mapped, ...shiftTaskToDay(payload.task, day) });
+        setDragError(null);
         router.refresh();
       } catch {
         setDragError("Couldn't reschedule that task.");
@@ -157,7 +172,10 @@ export function MonthView({
                   onClick={() => openCreate("event", day)}
                   onDragEnter={() => setDragOverDay(day.getTime())}
                   onDragLeave={() => setDragOverDay((current) => (current === day.getTime() ? null : current))}
-                  onDragOver={(event) => event.preventDefault()}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
                   onDrop={(event) => {
                     event.preventDefault();
                     void handleDrop(day);
@@ -178,7 +196,12 @@ export function MonthView({
                               task={entry.task}
                               onTitleClick={openEditTask}
                               draggable
-                              onDragStart={() => setDragPayload({ kind: "task", task: entry.task })}
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData("text/plain", entry.task.id);
+                                event.dataTransfer.effectAllowed = "move";
+                                setDragPayload({ kind: "task", task: entry.task });
+                              }}
+                              onDragEnd={() => setDragPayload(null)}
                             />
                           );
                         }
@@ -188,7 +211,12 @@ export function MonthView({
                             key={entry.event.id}
                             className={`mg-chip ${colorToken}`}
                             draggable
-                            onDragStart={() => setDragPayload({ kind: "event", event: entry.event })}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData("text/plain", entry.event.id);
+                              event.dataTransfer.effectAllowed = "move";
+                              setDragPayload({ kind: "event", event: entry.event, grabDay: day });
+                            }}
+                            onDragEnd={() => setDragPayload(null)}
                             onClick={() => openEditEvent(entry.event)}
                           >
                             {entry.event.start.dateTime && (

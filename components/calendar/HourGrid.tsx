@@ -10,14 +10,19 @@ import { updateTaskAction } from "@/lib/actions/calendar-tasks";
 import type { CalendarColorToken } from "@/lib/calendar-colors";
 import {
   WEEKDAY_NAMES_UPPER,
-  eventStartDay,
   formatDateParam,
   formatTimeLabel,
   fractionalHour,
   isSameLocalDay,
   localParts,
 } from "@/lib/calendar-dates";
-import { hourFromDropOffset, moveEventToSlot, moveTaskToSlot, shiftEventToDay } from "@/lib/calendar-drag";
+import {
+  hourFromDropOffset,
+  moveEventToSlot,
+  moveTaskToSlot,
+  shiftEventToDay,
+  withoutEventClobberFields,
+} from "@/lib/calendar-drag";
 import { calendarTaskToEditorInitial, googleEventToEditorInitial } from "@/lib/calendar-event-task-mapping";
 import {
   GRID_END_HOUR,
@@ -34,8 +39,20 @@ import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
 
-/** What's currently being dragged in this grid — tracked once at the `HourGrid` level (not per-row) so a task picked up from the all-day row or the timed grid can be dropped into either lane. */
-type DragPayload = { kind: "event"; event: GoogleCalendarEvent } | { kind: "task"; task: CalendarTaskItem };
+/**
+ * What's currently being dragged in this grid — tracked once at the
+ * `HourGrid` level (not per-row) so a task picked up from the all-day row or
+ * the timed grid can be dropped into either lane. `grabDay` is the day whose
+ * *cell* the drag actually started from — a multi-day all-day event renders
+ * a chip in every day it spans, so this is not always the event's own start
+ * day, and `shiftEventToDay` needs the real grab point to nudge the event by
+ * the gesture's actual day delta instead of re-anchoring its start on the
+ * drop target. Unused by the timed-grid path (`moveEventToSlot`), where an
+ * event only ever renders in its own single day.
+ */
+type DragPayload =
+  | { kind: "event"; event: GoogleCalendarEvent; grabDay: Date }
+  | { kind: "task"; task: CalendarTaskItem };
 
 /** The fixed set of hour rows shown on the grid, e.g. [7, 8, ..., 21] for the default 7 AM–10 PM window. */
 const GRID_HOURS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => GRID_START_HOUR + i);
@@ -169,9 +186,11 @@ export function HourGrid({
   const { openCreate, openEditEvent, openEditTask } = useCalendarInteraction();
   const router = useRouter();
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null);
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
 
   async function handleAllDayDrop(day: Date) {
+    setDragOverKey(null);
     const payload = dragPayload;
     setDragPayload(null);
     if (!payload) {
@@ -183,20 +202,29 @@ export function HourGrid({
       if (payload.event.start.dateTime) {
         return;
       }
-      if (isSameLocalDay(eventStartDay(payload.event), day)) {
+      if (isSameLocalDay(payload.grabDay, day)) {
         return;
       }
       const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
       try {
-        await updateEventAction({ ...mapped, ...shiftEventToDay(payload.event, day) });
+        await updateEventAction({
+          ...withoutEventClobberFields(mapped),
+          ...shiftEventToDay(payload.event, payload.grabDay, day),
+        });
+        setDragError(null);
         router.refresh();
       } catch {
         setDragError("Couldn't reschedule that event.");
       }
     } else {
+      // Already an all-day task on this same day — no change to make.
+      if (payload.task.dueDate === formatDateParam(day) && payload.task.dueTime === null) {
+        return;
+      }
       const mapped = calendarTaskToEditorInitial(payload.task) as TaskActionInput & { taskId: string };
       try {
         await updateTaskAction({ ...mapped, ...moveTaskToSlot(payload.task, day, null) });
+        setDragError(null);
         router.refresh();
       } catch {
         setDragError("Couldn't reschedule that task.");
@@ -205,6 +233,7 @@ export function HourGrid({
   }
 
   async function handleTimedDrop(day: Date, offsetY: number) {
+    setDragOverKey(null);
     const payload = dragPayload;
     setDragPayload(null);
     if (!payload) {
@@ -220,7 +249,11 @@ export function HourGrid({
       }
       const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
       try {
-        await updateEventAction({ ...mapped, ...moveEventToSlot(payload.event, day, targetHour) });
+        await updateEventAction({
+          ...withoutEventClobberFields(mapped),
+          ...moveEventToSlot(payload.event, day, targetHour),
+        });
+        setDragError(null);
         router.refresh();
       } catch {
         setDragError("Couldn't reschedule that event.");
@@ -229,6 +262,7 @@ export function HourGrid({
       const mapped = calendarTaskToEditorInitial(payload.task) as TaskActionInput & { taskId: string };
       try {
         await updateTaskAction({ ...mapped, ...moveTaskToSlot(payload.task, day, targetHour) });
+        setDragError(null);
         router.refresh();
       } catch {
         setDragError("Couldn't reschedule that task.");
@@ -237,7 +271,7 @@ export function HourGrid({
   }
 
   return (
-    <div className={gridClassName}>
+    <>
       {dragError && (
         <div className="error-block" role="alert">
           {dragError}
@@ -246,6 +280,7 @@ export function HourGrid({
           </button>
         </div>
       )}
+      <div className={gridClassName}>
       <div className="wg-corner" />
 
       {days.map((day, index) => (
@@ -259,43 +294,61 @@ export function HourGrid({
         </div>
       ))}
 
-      {days.map((day, index) => (
-        <div
-          key={day.getTime()}
-          className="wg-allday"
-          data-testid="wg-allday"
-          style={{ gridColumn: index + 2 }}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            void handleAllDayDrop(day);
-          }}
-        >
-          {getAllDayEvents(events, day).map((event) => {
-            const colorToken = resolveEventColorToken(event, colorByCalendar);
-            return (
-              <span
-                key={event.id}
-                className={`wg-chip ${colorToken}`}
+      {days.map((day, index) => {
+        const alldayKey = `${day.getTime()}-allday`;
+        return (
+          <div
+            key={day.getTime()}
+            className={dragOverKey === alldayKey ? "wg-allday drag-over" : "wg-allday"}
+            data-testid="wg-allday"
+            style={{ gridColumn: index + 2 }}
+            onDragEnter={() => setDragOverKey(alldayKey)}
+            onDragLeave={() => setDragOverKey((current) => (current === alldayKey ? null : current))}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              void handleAllDayDrop(day);
+            }}
+          >
+            {getAllDayEvents(events, day).map((event) => {
+              const colorToken = resolveEventColorToken(event, colorByCalendar);
+              return (
+                <span
+                  key={event.id}
+                  className={`wg-chip ${colorToken}`}
+                  draggable
+                  onDragStart={(dragEvent) => {
+                    dragEvent.dataTransfer.setData("text/plain", event.id);
+                    dragEvent.dataTransfer.effectAllowed = "move";
+                    setDragPayload({ kind: "event", event, grabDay: day });
+                  }}
+                  onDragEnd={() => setDragPayload(null)}
+                  onClick={() => openEditEvent(event)}
+                >
+                  {event.summary}
+                </span>
+              );
+            })}
+            {getAllDayTasks(tasks, day).map((task) => (
+              <TaskCheckbox
+                key={task.id}
+                task={task}
+                onTitleClick={openEditTask}
                 draggable
-                onDragStart={() => setDragPayload({ kind: "event", event })}
-                onClick={() => openEditEvent(event)}
-              >
-                {event.summary}
-              </span>
-            );
-          })}
-          {getAllDayTasks(tasks, day).map((task) => (
-            <TaskCheckbox
-              key={task.id}
-              task={task}
-              onTitleClick={openEditTask}
-              draggable
-              onDragStart={() => setDragPayload({ kind: "task", task })}
-            />
-          ))}
-        </div>
-      ))}
+                onDragStart={(dragEvent) => {
+                  dragEvent.dataTransfer.setData("text/plain", task.id);
+                  dragEvent.dataTransfer.effectAllowed = "move";
+                  setDragPayload({ kind: "task", task });
+                }}
+                onDragEnd={() => setDragPayload(null)}
+              />
+            ))}
+          </div>
+        );
+      })}
 
       {GRID_HOURS.map((hour) => (
         <div key={hour} className="wg-hour">
@@ -310,13 +363,20 @@ export function HourGrid({
         // `dateTime`, which carries its own offset (see calendar-dates.ts).
         const nowTop = isToday ? (fractionalHour(localParts(now)) - GRID_START_HOUR) * HOUR_ROW_HEIGHT : null;
 
+        const colKey = `${day.getTime()}-timed`;
+
         return (
           <div
             key={day.getTime()}
-            className="wg-col"
+            className={dragOverKey === colKey ? "wg-col drag-over" : "wg-col"}
             data-testid="wg-col"
             style={{ gridColumn: index + 2 }}
-            onDragOver={(event) => event.preventDefault()}
+            onDragEnter={() => setDragOverKey(colKey)}
+            onDragLeave={() => setDragOverKey((current) => (current === colKey ? null : current))}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+            }}
             onDrop={(event) => {
               event.preventDefault();
               const offsetY = event.clientY - event.currentTarget.getBoundingClientRect().top;
@@ -341,7 +401,12 @@ export function HourGrid({
                       task={block.item}
                       onTitleClick={openEditTask}
                       draggable
-                      onDragStart={() => setDragPayload({ kind: "task", task: block.item })}
+                      onDragStart={(dragEvent) => {
+                        dragEvent.dataTransfer.setData("text/plain", block.item.id);
+                        dragEvent.dataTransfer.effectAllowed = "move";
+                        setDragPayload({ kind: "task", task: block.item });
+                      }}
+                      onDragEnd={() => setDragPayload(null)}
                     />
                   </div>
                 );
@@ -355,7 +420,12 @@ export function HourGrid({
                   className={`wg-event ${colorToken}`}
                   style={blockStyle}
                   draggable
-                  onDragStart={() => setDragPayload({ kind: "event", event })}
+                  onDragStart={(dragEvent) => {
+                    dragEvent.dataTransfer.setData("text/plain", event.id);
+                    dragEvent.dataTransfer.effectAllowed = "move";
+                    setDragPayload({ kind: "event", event, grabDay: day });
+                  }}
+                  onDragEnd={() => setDragPayload(null)}
                   onClick={() => openEditEvent(event)}
                 >
                   <span className="et">{event.summary}</span>
@@ -369,6 +439,7 @@ export function HourGrid({
           </div>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }

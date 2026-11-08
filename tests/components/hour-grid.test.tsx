@@ -86,11 +86,38 @@ function Harness({
   );
 }
 
-/** Dispatches the minimal native-DnD event sequence (no library helper exists here): dragstart on the dragged element, then dragover + drop on the target. */
+/**
+ * A minimal stand-in for the browser's `DataTransfer`, which jsdom doesn't
+ * implement at all (no `DragEvent` constructor either — see `fireDrop`).
+ * Only the members the production handlers actually call.
+ */
+function fakeDataTransfer() {
+  return { setData: () => {}, effectAllowed: "none", dropEffect: "none" };
+}
+
+/**
+ * Dispatches the minimal native-DnD event sequence (no library helper exists
+ * here, and `@testing-library/dom`'s `fireEvent.dragStart`/`dragOver`/`drop`
+ * shorthands can't be used as-is: this jsdom has no `DragEvent` constructor,
+ * so their internal `createEvent` silently falls back to a plain `Event`
+ * with no `dataTransfer` at all — exactly what the production handlers read
+ * on every one of these three events). Each event is built by hand with a
+ * `dataTransfer` attached, then dispatched through `fireEvent`'s generic
+ * `(element, event)` form — the shorthand helpers' own act()-wrapping, which
+ * raw `element.dispatchEvent` doesn't get, and which is what makes the next
+ * dispatch in this same sequence see the state `dragstart`'s handler just set.
+ */
 function fireDrop(source: HTMLElement, target: HTMLElement) {
-  fireEvent.dragStart(source);
-  fireEvent.dragOver(target);
-  fireEvent.drop(target);
+  const dataTransfer = fakeDataTransfer();
+  for (const [element, type] of [
+    [source, "dragstart"],
+    [target, "dragover"],
+    [target, "drop"],
+  ] as const) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, { dataTransfer });
+    fireEvent(element, event);
+  }
 }
 
 /** The `.wg-allday` div for `day`'s column, picked by its position among `sevenDays` (one `data-testid="wg-allday"` per day, in day order). */
@@ -116,11 +143,19 @@ function dayColumn(): HTMLElement {
 function fireDropAt(source: HTMLElement, target: HTMLElement, { offsetY }: { offsetY: number }) {
   target.getBoundingClientRect = () =>
     ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
-  fireEvent.dragStart(source);
-  fireEvent.dragOver(target);
+  const dataTransfer = fakeDataTransfer();
+
+  const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+  Object.assign(dragStart, { dataTransfer });
+  fireEvent(source, dragStart);
+
+  const dragOver = new Event("dragover", { bubbles: true, cancelable: true });
+  Object.assign(dragOver, { dataTransfer });
+  fireEvent(target, dragOver);
+
   const dropEvent = new Event("drop", { bubbles: true, cancelable: true });
-  Object.assign(dropEvent, { clientY: offsetY });
-  target.dispatchEvent(dropEvent);
+  Object.assign(dropEvent, { dataTransfer, clientY: offsetY });
+  fireEvent(target, dropEvent);
 }
 
 afterEach(() => {
@@ -153,13 +188,77 @@ test("dragging an all-day task onto a day column changes its dueDate only", asyn
   );
 });
 
-test("dragging a timed event within its own day column to a new time changes start/end, preserving duration", async () => {
+test("dropping an all-day task back on the day it already occupies is a no-op", () => {
+  render(<Harness days={sevenDays} tasks={[calendarTask({ id: "t1", dueDate: "2026-10-20", dueTime: null })]} />);
+  fireDrop(screen.getByText("Errand"), alldayCellForDay(20));
+  expect(mockUpdateTaskAction).not.toHaveBeenCalled();
+});
+
+test("a multi-day all-day event grabbed from a middle-day chip nudges by the gesture's day delta in the all-day row too", async () => {
+  // Oct 20-24 (exclusive end Oct 25) spans 5 of sevenDays' 7 columns.
+  render(<Harness days={sevenDays} events={[allDayEvent({ id: "e1", start: "2026-10-20", end: "2026-10-25" })]} />);
+  fireDrop(within(alldayCellForDay(22)).getByText("Conference"), alldayCellForDay(23));
+  await vi.waitFor(() =>
+    expect(mockUpdateEventAction).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: "e1", start: "2026-10-21", end: "2026-10-26" }),
+    ),
+  );
+});
+
+test("dragging an all-day event never resends its color, reminders, Meet link, or guests", async () => {
+  const event: GoogleCalendarEvent = {
+    id: "e1",
+    calendarId: "primary",
+    summary: "Conference",
+    start: { date: "2026-10-20" },
+    end: { date: "2026-10-21" },
+    colorId: "11",
+    conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.com/abc" }] },
+    reminders: { useDefault: false, overrides: [{ method: "popup", minutes: 10 }] },
+    attendees: [{ email: "guest@example.com" }],
+  };
+  render(<Harness days={sevenDays} events={[event]} />);
+  fireDrop(screen.getByText("Conference"), alldayCellForDay(25));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  const call = mockUpdateEventAction.mock.calls[0][0];
+  expect(call.colorToken).toBeUndefined();
+  expect(call.notifyMinutesBefore).toBeUndefined();
+  expect(call.addGoogleMeet).toBeUndefined();
+  expect(call.guestEmails).toBeUndefined();
+});
+
+test("dragging a timed event within its own day column to a new time changes start/end, preserving duration and the event's own offset", async () => {
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
   fireDropAt(screen.getByText("Standup"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT }); // -> 2 PM
   await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
   const call = mockUpdateEventAction.mock.calls[0][0];
-  expect(new Date(call.start).getHours()).toBe(14);
-  expect(new Date(call.end).getTime() - new Date(call.start).getTime()).toBe(60 * 60 * 1000);
+  // Literal string, not `new Date(call.start).getHours()` — this suite runs under TZ=UTC
+  // (see vitest.config.ts), and the fixture's event is deliberately offset at -04:00, so a
+  // runtime-local read would silently check the wrong thing once the offset is preserved.
+  expect(call.start).toBe("2026-10-20T14:00:00-04:00");
+  expect(call.end).toBe("2026-10-20T15:00:00-04:00");
+});
+
+test("dragging a timed event to a new time never resends its color, reminders, Meet link, or guests", async () => {
+  const event: GoogleCalendarEvent = {
+    id: "e1",
+    calendarId: "primary",
+    summary: "Standup",
+    start: { dateTime: "2026-10-20T09:00:00-04:00" },
+    end: { dateTime: "2026-10-20T10:00:00-04:00" },
+    colorId: "11",
+    conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.com/abc" }] },
+    reminders: { useDefault: false, overrides: [{ method: "popup", minutes: 10 }] },
+    attendees: [{ email: "guest@example.com" }],
+  };
+  render(<Harness days={[oneDay]} events={[event]} />);
+  fireDropAt(screen.getByText("Standup"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT });
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  const call = mockUpdateEventAction.mock.calls[0][0];
+  expect(call.colorToken).toBeUndefined();
+  expect(call.notifyMinutesBefore).toBeUndefined();
+  expect(call.addGoogleMeet).toBeUndefined();
+  expect(call.guestEmails).toBeUndefined();
 });
 
 test("dragging a timed task to a new time sets a quarter-hour dueTime", async () => {

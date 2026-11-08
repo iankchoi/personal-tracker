@@ -329,6 +329,16 @@ export function EventTaskModal(props: {
         onCancel={onClose}
       />
     );
+  } else if (popup.mode === "day-detail") {
+    body = (
+      <DayDetailView
+        key={sessionKey}
+        date={popup.date}
+        events={events}
+        tasks={tasks}
+        colorByCalendar={colorByCalendar}
+      />
+    );
   }
 
   return <ModalShell onClose={onClose}>{body}</ModalShell>;

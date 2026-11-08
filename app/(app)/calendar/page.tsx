@@ -239,7 +239,13 @@ export default async function CalendarPage({
   // it renders its own `.empty-block` internally when it has nothing to show
   // (see AgendaView.tsx).
   return (
-    <CalendarInteractionProvider calendars={calendars} taskLists={taskLists}>
+    <CalendarInteractionProvider
+      calendars={calendars}
+      taskLists={taskLists}
+      events={allEvents}
+      tasks={allTasks}
+      colorByCalendar={colorByCalendar}
+    >
       <div className="cal-col">
         <CalendarToolbar view={view} date={date} />
         {view === "week" && (

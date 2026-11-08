@@ -17,7 +17,7 @@ import {
   isSameLocalDay,
   localParts,
 } from "@/lib/calendar-dates";
-import { moveTaskToSlot, shiftEventToDay } from "@/lib/calendar-drag";
+import { hourFromDropOffset, moveEventToSlot, moveTaskToSlot, shiftEventToDay } from "@/lib/calendar-drag";
 import { calendarTaskToEditorInitial, googleEventToEditorInitial } from "@/lib/calendar-event-task-mapping";
 import {
   GRID_END_HOUR,
@@ -179,6 +179,10 @@ export function HourGrid({
     }
 
     if (payload.kind === "event") {
+      // Events never cross lanes: a timed event dropped on the all-day row is not a valid target.
+      if (payload.event.start.dateTime) {
+        return;
+      }
       if (isSameLocalDay(eventStartDay(payload.event), day)) {
         return;
       }
@@ -193,6 +197,38 @@ export function HourGrid({
       const mapped = calendarTaskToEditorInitial(payload.task) as TaskActionInput & { taskId: string };
       try {
         await updateTaskAction({ ...mapped, ...moveTaskToSlot(payload.task, day, null) });
+        router.refresh();
+      } catch {
+        setDragError("Couldn't reschedule that task.");
+      }
+    }
+  }
+
+  async function handleTimedDrop(day: Date, offsetY: number) {
+    const payload = dragPayload;
+    setDragPayload(null);
+    if (!payload) {
+      return;
+    }
+
+    const targetHour = hourFromDropOffset(offsetY);
+
+    if (payload.kind === "event") {
+      // Events never cross lanes: an all-day event dropped on the timed grid is not a valid target.
+      if (!payload.event.start.dateTime) {
+        return;
+      }
+      const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
+      try {
+        await updateEventAction({ ...mapped, ...moveEventToSlot(payload.event, day, targetHour) });
+        router.refresh();
+      } catch {
+        setDragError("Couldn't reschedule that event.");
+      }
+    } else {
+      const mapped = calendarTaskToEditorInitial(payload.task) as TaskActionInput & { taskId: string };
+      try {
+        await updateTaskAction({ ...mapped, ...moveTaskToSlot(payload.task, day, targetHour) });
         router.refresh();
       } catch {
         setDragError("Couldn't reschedule that task.");
@@ -275,7 +311,18 @@ export function HourGrid({
         const nowTop = isToday ? (fractionalHour(localParts(now)) - GRID_START_HOUR) * HOUR_ROW_HEIGHT : null;
 
         return (
-          <div key={day.getTime()} className="wg-col" style={{ gridColumn: index + 2 }}>
+          <div
+            key={day.getTime()}
+            className="wg-col"
+            data-testid="wg-col"
+            style={{ gridColumn: index + 2 }}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              const offsetY = event.clientY - event.currentTarget.getBoundingClientRect().top;
+              void handleTimedDrop(day, offsetY);
+            }}
+          >
             {GRID_HOURS.map((hour) => (
               <div key={hour} className="wg-line" onClick={() => openCreate("event", day, hour)} />
             ))}
@@ -290,7 +337,12 @@ export function HourGrid({
               if (block.kind === "task") {
                 return (
                   <div key={`task-${block.item.id}`} className="wg-event wg-task" style={blockStyle}>
-                    <TaskCheckbox task={block.item} onTitleClick={openEditTask} />
+                    <TaskCheckbox
+                      task={block.item}
+                      onTitleClick={openEditTask}
+                      draggable
+                      onDragStart={() => setDragPayload({ kind: "task", task: block.item })}
+                    />
                   </div>
                 );
               }
@@ -302,6 +354,8 @@ export function HourGrid({
                   key={`event-${event.id}`}
                   className={`wg-event ${colorToken}`}
                   style={blockStyle}
+                  draggable
+                  onDragStart={() => setDragPayload({ kind: "event", event })}
                   onClick={() => openEditEvent(event)}
                 >
                   <span className="et">{event.summary}</span>

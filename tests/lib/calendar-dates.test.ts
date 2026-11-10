@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { allDayEndToExclusive, allDayEndToInclusive } from "../../lib/calendar-dates";
+import { allDayEndToExclusive, allDayEndToInclusive, formatDateParam, parseDateParam } from "../../lib/calendar-dates";
 
 test("allDayEndToInclusive turns Google's exclusive all-day end.date into the inclusive last day", () => {
   // Google reports a one-day event on Oct 25 as start 10-25 / end 10-26.
@@ -37,4 +37,13 @@ test("a value that isn't a YYYY-MM-DD date passes through unchanged instead of t
   expect(allDayEndToExclusive("")).toBe("");
   expect(allDayEndToInclusive("")).toBe("");
   expect(allDayEndToExclusive("2026-10")).toBe("2026-10");
+});
+
+test("parseDateParam is formatDateParam's inverse", () => {
+  expect(parseDateParam("2026-10-25")).toEqual(new Date(2026, 9, 25));
+});
+
+test("parseDateParam round-trips through formatDateParam", () => {
+  const day = new Date(2026, 9, 25);
+  expect(parseDateParam(formatDateParam(day))).toEqual(day);
 });

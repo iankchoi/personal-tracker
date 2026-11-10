@@ -86,40 +86,6 @@ function Harness({
   );
 }
 
-/**
- * A minimal stand-in for the browser's `DataTransfer`, which jsdom doesn't
- * implement at all (no `DragEvent` constructor either — see `fireDrop`).
- * Only the members the production handlers actually call.
- */
-function fakeDataTransfer() {
-  return { setData: () => {}, effectAllowed: "none", dropEffect: "none" };
-}
-
-/**
- * Dispatches the minimal native-DnD event sequence (no library helper exists
- * here, and `@testing-library/dom`'s `fireEvent.dragStart`/`dragOver`/`drop`
- * shorthands can't be used as-is: this jsdom has no `DragEvent` constructor,
- * so their internal `createEvent` silently falls back to a plain `Event`
- * with no `dataTransfer` at all — exactly what the production handlers read
- * on every one of these three events). Each event is built by hand with a
- * `dataTransfer` attached, then dispatched through `fireEvent`'s generic
- * `(element, event)` form — the shorthand helpers' own act()-wrapping, which
- * raw `element.dispatchEvent` doesn't get, and which is what makes the next
- * dispatch in this same sequence see the state `dragstart`'s handler just set.
- */
-function fireDrop(source: HTMLElement, target: HTMLElement) {
-  const dataTransfer = fakeDataTransfer();
-  for (const [element, type] of [
-    [source, "dragstart"],
-    [target, "dragover"],
-    [target, "drop"],
-  ] as const) {
-    const event = new Event(type, { bubbles: true, cancelable: true });
-    Object.assign(event, { dataTransfer });
-    fireEvent(element, event);
-  }
-}
-
 /** The `.wg-allday` div for `day`'s column, picked by its position among `sevenDays` (one `data-testid="wg-allday"` per day, in day order). */
 function alldayCellForDay(day: number): HTMLElement {
   const index = sevenDays.findIndex((d) => d.getDate() === day);
@@ -132,49 +98,38 @@ function dayColumn(): HTMLElement {
 }
 
 /**
- * Like `fireDrop`, but stubs the target's `getBoundingClientRect()` to a
- * zero top and attaches `clientY: offsetY` directly to the dispatched drop
- * event — jsdom has no `DragEvent` constructor, so `@testing-library/dom`'s
- * `fireEvent.drop(target, { clientY })` silently falls back to a plain
- * `Event` that drops the init dict's `clientY` entirely. Constructing the
- * event by hand and assigning the property afterward is the only way to get
- * it to `HourGrid`'s `onDrop` handler in this environment.
+ * Dispatches the pointer-event sequence for a drag-to-reschedule gesture:
+ * press at (0,0) on `source`, one move straight to (`clientX`, `clientY`) —
+ * already past `usePointerDrag`'s 4px threshold in a single step — then
+ * release at the same point, with `document.elementFromPoint` stubbed to
+ * resolve to `hitElement` for the gesture's duration (standing in for
+ * whatever `.wg-allday`/`.wg-col` element the pointer would land on in a real
+ * browser; jsdom does no layout at all). The pointer-event replacement for
+ * `fireDrop`/`fireDropAt`.
  */
-function fireDropAt(source: HTMLElement, target: HTMLElement, { offsetY }: { offsetY: number }) {
-  target.getBoundingClientRect = () =>
-    ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
-  const dataTransfer = fakeDataTransfer();
-
-  const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
-  Object.assign(dragStart, { dataTransfer });
-  fireEvent(source, dragStart);
-
-  const dragOver = new Event("dragover", { bubbles: true, cancelable: true });
-  Object.assign(dragOver, { dataTransfer });
-  fireEvent(target, dragOver);
-
-  const dropEvent = new Event("drop", { bubbles: true, cancelable: true });
-  Object.assign(dropEvent, { dataTransfer, clientY: offsetY });
-  fireEvent(target, dropEvent);
+function fireDragTo(
+  source: HTMLElement,
+  hitElement: HTMLElement,
+  { clientX = 20, clientY = 20 }: { clientX?: number; clientY?: number } = {},
+) {
+  const originalElementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => hitElement;
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerMove(source, { clientX, clientY, pointerId: 1 });
+  fireEvent.pointerUp(source, { clientX, clientY, pointerId: 1 });
+  document.elementFromPoint = originalElementFromPoint;
 }
 
-/** Like `fireDropAt`, but stops after `dragenter`/`dragover` — for inspecting mid-drag feedback (the drop indicator) before any drop actually happens. */
-function dragOverAt(source: HTMLElement, target: HTMLElement, { offsetY }: { offsetY: number }) {
-  target.getBoundingClientRect = () =>
+/**
+ * Stubs `hitElement`'s `getBoundingClientRect()` to a zero top, so a drag's
+ * `offsetY` (computed as `clientY - hitElement.getBoundingClientRect().top`
+ * inside `HourGrid`'s `hitTest`) comes out equal to the raw `clientY` passed
+ * to `fireDragTo` — the timed-grid variant of the stubbing `fireDragTo` alone
+ * doesn't need for the all-day lane.
+ */
+function stubZeroRect(hitElement: HTMLElement) {
+  hitElement.getBoundingClientRect = () =>
     ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
-  const dataTransfer = fakeDataTransfer();
-
-  const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
-  Object.assign(dragStart, { dataTransfer });
-  fireEvent(source, dragStart);
-
-  const dragEnter = new Event("dragenter", { bubbles: true, cancelable: true });
-  Object.assign(dragEnter, { dataTransfer });
-  fireEvent(target, dragEnter);
-
-  const dragOver = new Event("dragover", { bubbles: true, cancelable: true });
-  Object.assign(dragOver, { dataTransfer, clientY: offsetY });
-  fireEvent(target, dragOver);
 }
 
 afterEach(() => {
@@ -189,7 +144,7 @@ test("dragging an all-day event chip to a different day column reschedules it an
   render(<Harness days={sevenDays} events={[allDayEvent({ id: "e1", start: "2026-10-20", end: "2026-10-22" })]} />);
   // The event spans two days (exclusive end), so it renders in both the 20th's and 21st's
   // all-day columns — drag from the chip in its own start day specifically.
-  fireDrop(within(alldayCellForDay(20)).getByText("Conference"), alldayCellForDay(25));
+  fireDragTo(within(alldayCellForDay(20)).getByText("Conference"), alldayCellForDay(25));
   await vi.waitFor(() =>
     expect(mockUpdateEventAction).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: "e1", start: "2026-10-25", end: "2026-10-27" }),
@@ -199,7 +154,7 @@ test("dragging an all-day event chip to a different day column reschedules it an
 
 test("dragging an all-day task onto a day column changes its dueDate only", async () => {
   render(<Harness days={sevenDays} tasks={[calendarTask({ id: "t1", dueDate: "2026-10-20", dueTime: null })]} />);
-  fireDrop(screen.getByText("Errand"), alldayCellForDay(25));
+  fireDragTo(screen.getByText("Errand"), alldayCellForDay(25));
   await vi.waitFor(() =>
     expect(mockUpdateTaskAction).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: "t1", dueDate: "2026-10-25", dueTime: null }),
@@ -209,14 +164,14 @@ test("dragging an all-day task onto a day column changes its dueDate only", asyn
 
 test("dropping an all-day task back on the day it already occupies is a no-op", () => {
   render(<Harness days={sevenDays} tasks={[calendarTask({ id: "t1", dueDate: "2026-10-20", dueTime: null })]} />);
-  fireDrop(screen.getByText("Errand"), alldayCellForDay(20));
+  fireDragTo(screen.getByText("Errand"), alldayCellForDay(20));
   expect(mockUpdateTaskAction).not.toHaveBeenCalled();
 });
 
 test("a multi-day all-day event grabbed from a middle-day chip nudges by the gesture's day delta in the all-day row too", async () => {
   // Oct 20-24 (exclusive end Oct 25) spans 5 of sevenDays' 7 columns.
   render(<Harness days={sevenDays} events={[allDayEvent({ id: "e1", start: "2026-10-20", end: "2026-10-25" })]} />);
-  fireDrop(within(alldayCellForDay(22)).getByText("Conference"), alldayCellForDay(23));
+  fireDragTo(within(alldayCellForDay(22)).getByText("Conference"), alldayCellForDay(23));
   await vi.waitFor(() =>
     expect(mockUpdateEventAction).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: "e1", start: "2026-10-21", end: "2026-10-26" }),
@@ -237,7 +192,7 @@ test("dragging an all-day event never resends its color, reminders, Meet link, o
     attendees: [{ email: "guest@example.com" }],
   };
   render(<Harness days={sevenDays} events={[event]} />);
-  fireDrop(screen.getByText("Conference"), alldayCellForDay(25));
+  fireDragTo(screen.getByText("Conference"), alldayCellForDay(25));
   await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
   const call = mockUpdateEventAction.mock.calls[0][0];
   expect(call.colorToken).toBeUndefined();
@@ -248,7 +203,16 @@ test("dragging an all-day event never resends its color, reminders, Meet link, o
 
 test("dragging a timed event within its own day column to a new time changes start/end, preserving duration and the event's own offset", async () => {
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
-  fireDropAt(screen.getByText("Standup"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT }); // -> 2 PM
+  const column = dayColumn();
+  column.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
+  const originalElementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => column;
+  const source = screen.getByText("Standup");
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerMove(source, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 }); // -> 2 PM
+  fireEvent.pointerUp(source, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
+  document.elementFromPoint = originalElementFromPoint;
   await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
   const call = mockUpdateEventAction.mock.calls[0][0];
   // Literal string, not `new Date(call.start).getHours()` — this suite runs under TZ=UTC
@@ -271,7 +235,9 @@ test("dragging a timed event to a new time never resends its color, reminders, M
     attendees: [{ email: "guest@example.com" }],
   };
   render(<Harness days={[oneDay]} events={[event]} />);
-  fireDropAt(screen.getByText("Standup"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT });
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Standup"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT });
   await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
   const call = mockUpdateEventAction.mock.calls[0][0];
   expect(call.colorToken).toBeUndefined();
@@ -282,51 +248,69 @@ test("dragging a timed event to a new time never resends its color, reminders, M
 
 test("dragging over the timed grid shows a drop indicator snapped to the nearest quarter hour, not the raw pointer position", () => {
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
+  const column = dayColumn();
+  column.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
+  const originalElementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => column;
   // 7 * HOUR_ROW_HEIGHT (= 2 PM exactly) + 20px of "slop" — snaps to 2:15 PM, not 2:06ish.
-  dragOverAt(screen.getByText("Standup"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT + 20 });
-  const indicator = dayColumn().querySelector(".wg-drop-indicator") as HTMLElement;
+  fireEvent.pointerDown(screen.getByText("Standup"), { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerMove(screen.getByText("Standup"), { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT + 20, pointerId: 1 });
+  document.elementFromPoint = originalElementFromPoint;
+  const indicator = column.querySelector(".wg-drop-indicator") as HTMLElement;
   expect(indicator).not.toBeNull();
   expect(indicator.style.top).toBe(`${7.25 * HOUR_ROW_HEIGHT}px`);
 });
 
-test("ending the drag (dragend) clears the drop indicator", () => {
-  // Not dragleave: this grid deliberately has no dragenter/dragleave handlers at all.
-  // Safari is documented to be unreliable about populating `relatedTarget` on drag
-  // events, which is exactly the property a dragleave-based "did we really leave"
-  // check would depend on — a dependency that would silently degrade back into the
-  // same flicker-to-invisible bug this feature already hit once, but only in Safari.
-  // dragover (set) and dragend/drop (clear) are the two events every browser agrees on.
+test("completing a drop clears the drop indicator", () => {
+  // The pointer-event replacement for the old native-DnD "dragend clears the indicator" test.
+  // The pointer gesture's own cancel/cleanup mechanics (pointercancel) are covered directly by
+  // usePointerDrag's own tests, so this just confirms HourGrid's own dragOverKey/dragPreviewHour
+  // state doesn't outlive a *completed* gesture either.
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
-  const source = screen.getByText("Standup");
   const column = dayColumn();
-  dragOverAt(source, column, { offsetY: 7 * HOUR_ROW_HEIGHT });
+  column.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
+  const originalElementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => column;
+  const source = screen.getByText("Standup");
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerMove(source, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
   expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
 
-  fireEvent(source, new Event("dragend", { bubbles: true, cancelable: true }));
+  fireEvent.pointerUp(source, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
+  document.elementFromPoint = originalElementFromPoint;
   expect(column.querySelector(".wg-drop-indicator")).toBeNull();
 });
 
-test("the drop indicator survives the pointer crossing onto a child element within the column (no flicker)", () => {
-  // Regression test for the real HTML5 DnD gotcha this feature hit: dragenter/dragleave
-  // fire on every child boundary the pointer crosses, not just on truly entering/leaving
-  // the column — tracking "is this column active" that way made the indicator flicker
-  // constantly while dragging through the column's own `.wg-line` rows and event blocks.
+test("the drop indicator still resolves to the column when the hit-tested element is one of its own children (no flicker)", () => {
+  // Regression test for the real HTML5 DnD gotcha this feature used to have: dragenter/dragleave
+  // fired on every child boundary the pointer crossed (any `.wg-line` or event block inside the
+  // column counts as a "child"), not just on truly entering/leaving the column, which made the
+  // indicator flicker constantly. Pointer-event hit-testing has no bubbling boundary event at all
+  // — `closest("[data-day]")` walks up from whatever element `document.elementFromPoint` resolves
+  // to, so landing on a descendant `.wg-line` instead of the column itself still resolves to the
+  // same column/day, with no flicker possible by construction.
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
   const column = dayColumn();
-  dragOverAt(screen.getByText("Standup"), column, { offsetY: 7 * HOUR_ROW_HEIGHT });
-  expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
-
+  column.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
   const childLine = column.querySelector(".wg-line") as HTMLElement;
-  const leaveOntoChild = new Event("dragleave", { bubbles: true, cancelable: true });
-  Object.assign(leaveOntoChild, { relatedTarget: childLine });
-  fireEvent(column, leaveOntoChild);
+  const originalElementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => childLine;
+
+  fireEvent.pointerDown(screen.getByText("Standup"), { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerMove(screen.getByText("Standup"), { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
+  document.elementFromPoint = originalElementFromPoint;
 
   expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
 });
 
 test("dragging a timed task to a new time sets a quarter-hour dueTime", async () => {
   render(<Harness days={[oneDay]} tasks={[calendarTask({ id: "t1", title: "Follow up", dueTime: "09:00" })]} />);
-  fireDropAt(screen.getByText("Follow up"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT });
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Follow up"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT });
   await vi.waitFor(() =>
     expect(mockUpdateTaskAction).toHaveBeenCalledWith(expect.objectContaining({ taskId: "t1", dueTime: "14:00" })),
   );
@@ -335,19 +319,23 @@ test("dragging a timed task to a new time sets a quarter-hour dueTime", async ()
 test("dropping a timed event into the all-day row is not a valid target (events don't cross lanes)", () => {
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
   const alldayRow = screen.getByTestId("wg-allday");
-  fireDrop(screen.getByText("Standup"), alldayRow);
+  fireDragTo(screen.getByText("Standup"), alldayRow);
   expect(mockUpdateEventAction).not.toHaveBeenCalled();
 });
 
 test("dropping an all-day event into the timed grid is not a valid target (events don't cross lanes)", () => {
   render(<Harness days={[oneDay]} events={[allDayEvent({ id: "e1", start: "2026-10-20", end: "2026-10-21" })]} />);
-  fireDropAt(screen.getByText("Conference"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT });
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Conference"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT });
   expect(mockUpdateEventAction).not.toHaveBeenCalled();
 });
 
 test("dragging an all-day task into the timed grid picks up a dueTime at the drop position", async () => {
   render(<Harness days={[oneDay]} tasks={[calendarTask({ id: "t1", dueDate: "2026-10-20", dueTime: null })]} />);
-  fireDropAt(screen.getByText("Errand"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT }); // -> 2 PM
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Errand"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT }); // -> 2 PM
   await vi.waitFor(() =>
     expect(mockUpdateTaskAction).toHaveBeenCalledWith(expect.objectContaining({ taskId: "t1", dueTime: "14:00" })),
   );
@@ -356,7 +344,7 @@ test("dragging an all-day task into the timed grid picks up a dueTime at the dro
 test("dragging a timed task into the all-day row clears its dueTime", async () => {
   render(<Harness days={[oneDay]} tasks={[calendarTask({ id: "t1", title: "Follow up", dueDate: "2026-10-20", dueTime: "09:00" })]} />);
   const alldayRow = screen.getByTestId("wg-allday");
-  fireDrop(screen.getByText("Follow up"), alldayRow);
+  fireDragTo(screen.getByText("Follow up"), alldayRow);
   await vi.waitFor(() =>
     expect(mockUpdateTaskAction).toHaveBeenCalledWith(expect.objectContaining({ taskId: "t1", dueTime: null })),
   );

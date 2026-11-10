@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 
 import type { EventActionInput } from "@/lib/actions/calendar-events";
 import { updateEventAction } from "@/lib/actions/calendar-events";
@@ -15,6 +15,7 @@ import {
   fractionalHour,
   isSameLocalDay,
   localParts,
+  parseDateParam,
 } from "@/lib/calendar-dates";
 import {
   hourFromDropOffset,
@@ -38,6 +39,180 @@ import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
+import { usePointerDrag } from "./usePointerDrag";
+
+/**
+ * Resolves a pointer position to the lane and day underneath it — the
+ * pointer-event replacement for the native-DnD `onDragOver`/`onDrop`
+ * handlers that used to read `event.currentTarget` directly. `.wg-allday`
+ * and `.wg-col` both carry `data-day`, so `closest("[data-day]")` finds
+ * whichever one the pointer is actually over (walking up through any child
+ * — a chip, a `.wg-line`, an event block — the same way `dayFromPoint` does
+ * for Month view's single lane), and `classList.contains` on that same
+ * element decides which lane it is. Only the timed lane needs an offset:
+ * `clientY - hitElement.getBoundingClientRect().top` is the exact math the
+ * old `onDragOver`/`onDrop` computed from `event.currentTarget`, just fed
+ * from a hit-tested element instead.
+ */
+function hitTest(
+  clientX: number,
+  clientY: number,
+): { day: Date; lane: "allday" } | { day: Date; lane: "timed"; offsetY: number } | null {
+  const hitElement = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-day]");
+  if (!hitElement) {
+    return null;
+  }
+
+  const day = parseDateParam(hitElement.dataset.day!);
+  if (hitElement.classList.contains("wg-allday")) {
+    return { day, lane: "allday" };
+  }
+
+  const offsetY = clientY - hitElement.getBoundingClientRect().top;
+  return { day, lane: "timed", offsetY };
+}
+
+/**
+ * One all-day event chip in `.wg-allday`, factored out of `HourGrid`'s
+ * render so `usePointerDrag` — a hook — has a stable call site, mirroring
+ * `MonthView`'s `MonthEventChip` for the same reason (the number of chips
+ * varies per row and across renders). `onPointerDown`/`onPointerCancel` are
+ * spread individually rather than via `{...drag}` so `usePointerDrag`'s
+ * `isDragging` field never lands on this DOM `<span>` as a stray attribute.
+ */
+function AllDayEventChip({
+  event,
+  colorToken,
+  onOpenEdit,
+  onGrab,
+  onMove,
+  onDrop,
+  onCancel,
+}: {
+  event: GoogleCalendarEvent;
+  colorToken: CalendarColorToken;
+  onOpenEdit(): void;
+  onGrab(): void;
+  onMove(clientX: number, clientY: number): void;
+  onDrop(clientX: number, clientY: number): void;
+  onCancel(): void;
+}) {
+  const { onPointerDown, onPointerMove, onPointerUp, onPointerCancel } = usePointerDrag({
+    onClick: onOpenEdit,
+    onMove,
+    onDrop,
+  });
+
+  return (
+    <span
+      className={`wg-chip ${colorToken}`}
+      onPointerDown={(pointerEvent) => {
+        onGrab();
+        onPointerDown(pointerEvent);
+      }}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => {
+        onCancel();
+        onPointerCancel();
+      }}
+    >
+      {event.summary}
+    </span>
+  );
+}
+
+/** One timed event block in `.wg-col`, mirroring `AllDayEventChip` above for the same one-hook-call-per-instance reason. */
+function TimedEventBlock({
+  event,
+  colorToken,
+  style,
+  onOpenEdit,
+  onGrab,
+  onMove,
+  onDrop,
+  onCancel,
+}: {
+  event: GoogleCalendarEvent;
+  colorToken: CalendarColorToken;
+  style: CSSProperties;
+  onOpenEdit(): void;
+  onGrab(): void;
+  onMove(clientX: number, clientY: number): void;
+  onDrop(clientX: number, clientY: number): void;
+  onCancel(): void;
+}) {
+  const { onPointerDown, onPointerMove, onPointerUp, onPointerCancel } = usePointerDrag({
+    onClick: onOpenEdit,
+    onMove,
+    onDrop,
+  });
+
+  return (
+    <div
+      className={`wg-event ${colorToken}`}
+      style={style}
+      onPointerDown={(pointerEvent) => {
+        onGrab();
+        onPointerDown(pointerEvent);
+      }}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => {
+        onCancel();
+        onPointerCancel();
+      }}
+    >
+      <span className="et">{event.summary}</span>
+      {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
+      <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>
+    </div>
+  );
+}
+
+/**
+ * One task entry — used for both the all-day row and the timed grid, since
+ * the component itself doesn't care which lane it's in (that only affects
+ * what its parent wraps it with and which `onMove`/`onDrop` callbacks it's
+ * given). Mirrors `MonthView`'s `MonthTaskEntry`, including its click-vs-drag
+ * handling: `onTitleClick` is wired into `usePointerDrag`'s `onClick` option,
+ * not `TaskCheckbox`'s own native `onClick` — see that component's doc
+ * comment for why a drag-aware caller can't let both paths call it.
+ */
+function HourGridTaskEntry({
+  task,
+  onTitleClick,
+  onGrab,
+  onMove,
+  onDrop,
+  onCancel,
+}: {
+  task: CalendarTaskItem;
+  onTitleClick(task: CalendarTaskItem): void;
+  onGrab(): void;
+  onMove(clientX: number, clientY: number): void;
+  onDrop(clientX: number, clientY: number): void;
+  onCancel(): void;
+}) {
+  const drag = usePointerDrag({ onClick: () => onTitleClick(task), onMove, onDrop });
+
+  return (
+    <TaskCheckbox
+      task={task}
+      dragHandlers={{
+        ...drag,
+        onPointerDown: (pointerEvent) => {
+          onGrab();
+          drag.onPointerDown(pointerEvent);
+        },
+        onPointerCancel: () => {
+          onCancel();
+          drag.onPointerCancel();
+        },
+      }}
+    />
+  );
+}
 
 /**
  * What's currently being dragged in this grid — tracked once at the
@@ -277,6 +452,52 @@ export function HourGrid({
     }
   }
 
+  // Mirrors the old onDragOver's dragOverKey/dragPreviewHour bookkeeping,
+  // driven by hit-testing instead of native dragover targets.
+  function handlePointerMove(clientX: number, clientY: number) {
+    const hit = hitTest(clientX, clientY);
+    if (!hit) {
+      setDragOverKey(null);
+      setDragPreviewHour(null);
+      return;
+    }
+    if (hit.lane === "allday") {
+      setDragOverKey(`${hit.day.getTime()}-allday`);
+      setDragPreviewHour(null);
+      return;
+    }
+    setDragOverKey(`${hit.day.getTime()}-timed`);
+    setDragPreviewHour(hourFromDropOffset(hit.offsetY));
+  }
+
+  // Mirrors the old onDrop handlers (which each called handleAllDayDrop/
+  // handleTimedDrop directly on their own lane's element), plus the old
+  // onDrop's own setDragPreviewHour(null) — now unconditional here since a
+  // single onDrop callback covers both lanes.
+  function handlePointerDrop(clientX: number, clientY: number) {
+    setDragPreviewHour(null);
+    const hit = hitTest(clientX, clientY);
+    if (!hit) {
+      setDragOverKey(null);
+      setDragPayload(null);
+      return;
+    }
+    if (hit.lane === "allday") {
+      void handleAllDayDrop(hit.day);
+    } else {
+      void handleTimedDrop(hit.day, hit.offsetY);
+    }
+  }
+
+  // Mirrors the old onDragEnd's unconditional reset — fires when a drag is
+  // aborted (pointercancel) rather than dropped, so it can't be picked up by
+  // a later, unrelated drop.
+  function clearDrag() {
+    setDragPayload(null);
+    setDragOverKey(null);
+    setDragPreviewHour(null);
+  }
+
   return (
     <>
       {dragError && (
@@ -308,62 +529,33 @@ export function HourGrid({
             key={day.getTime()}
             className={dragOverKey === alldayKey ? "wg-allday drag-over" : "wg-allday"}
             data-testid="wg-allday"
+            data-day={formatDateParam(day)}
             style={{ gridColumn: index + 2 }}
-            onDragOver={(event) => {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              // Set here, not on dragenter/dragleave: those fire on every child
-              // boundary the pointer crosses (any event chip or task inside this
-              // row counts as a "child"), not just on truly entering/leaving the
-              // row, so deriving this from the steadily-bubbling dragover instead
-              // is what keeps the highlight from flickering as the pointer moves
-              // across the row's contents.
-              setDragOverKey(alldayKey);
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              void handleAllDayDrop(day);
-            }}
           >
             {getAllDayEvents(events, day).map((event) => {
               const colorToken = resolveEventColorToken(event, colorByCalendar);
               return (
-                <span
+                <AllDayEventChip
                   key={event.id}
-                  className={`wg-chip ${colorToken}`}
-                  draggable
-                  onDragStart={(dragEvent) => {
-                    dragEvent.dataTransfer.setData("text/plain", event.id);
-                    dragEvent.dataTransfer.effectAllowed = "move";
-                    setDragPayload({ kind: "event", event, grabDay: day });
-                  }}
-                  onDragEnd={() => {
-                    setDragPayload(null);
-                    setDragOverKey(null);
-                    setDragPreviewHour(null);
-                  }}
-                  onClick={() => openEditEvent(event)}
-                >
-                  {event.summary}
-                </span>
+                  event={event}
+                  colorToken={colorToken}
+                  onOpenEdit={() => openEditEvent(event)}
+                  onGrab={() => setDragPayload({ kind: "event", event, grabDay: day })}
+                  onMove={handlePointerMove}
+                  onDrop={handlePointerDrop}
+                  onCancel={clearDrag}
+                />
               );
             })}
             {getAllDayTasks(tasks, day).map((task) => (
-              <TaskCheckbox
+              <HourGridTaskEntry
                 key={task.id}
                 task={task}
                 onTitleClick={openEditTask}
-                draggable
-                onDragStart={(dragEvent) => {
-                  dragEvent.dataTransfer.setData("text/plain", task.id);
-                  dragEvent.dataTransfer.effectAllowed = "move";
-                  setDragPayload({ kind: "task", task });
-                }}
-                onDragEnd={() => {
-                    setDragPayload(null);
-                    setDragOverKey(null);
-                    setDragPreviewHour(null);
-                  }}
+                onGrab={() => setDragPayload({ kind: "task", task })}
+                onMove={handlePointerMove}
+                onDrop={handlePointerDrop}
+                onCancel={clearDrag}
               />
             ))}
           </div>
@@ -390,28 +582,8 @@ export function HourGrid({
             key={day.getTime()}
             className={dragOverKey === colKey ? "wg-col drag-over" : "wg-col"}
             data-testid="wg-col"
+            data-day={formatDateParam(day)}
             style={{ gridColumn: index + 2 }}
-            onDragOver={(event) => {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              // Both set here, not on dragenter/dragleave: this column has 15
-              // stacked `.wg-line` rows plus event/task blocks as children, and
-              // dragenter/dragleave fire on every one of those child boundaries
-              // the pointer crosses — not just on truly entering/leaving the
-              // column — so tracking "entered" that way made the indicator (and
-              // the highlight) flicker constantly while dragging through the
-              // column's own contents. dragover bubbles up through children
-              // reliably instead, so it's the only source of truth here.
-              setDragOverKey(colKey);
-              const offsetY = event.clientY - event.currentTarget.getBoundingClientRect().top;
-              setDragPreviewHour(hourFromDropOffset(offsetY));
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              setDragPreviewHour(null);
-              const offsetY = event.clientY - event.currentTarget.getBoundingClientRect().top;
-              void handleTimedDrop(day, offsetY);
-            }}
           >
             {GRID_HOURS.map((hour) => (
               <div key={hour} className="wg-line" onClick={() => openCreate("event", day, hour)} />
@@ -434,20 +606,13 @@ export function HourGrid({
               if (block.kind === "task") {
                 return (
                   <div key={`task-${block.item.id}`} className="wg-event wg-task" style={blockStyle}>
-                    <TaskCheckbox
+                    <HourGridTaskEntry
                       task={block.item}
                       onTitleClick={openEditTask}
-                      draggable
-                      onDragStart={(dragEvent) => {
-                        dragEvent.dataTransfer.setData("text/plain", block.item.id);
-                        dragEvent.dataTransfer.effectAllowed = "move";
-                        setDragPayload({ kind: "task", task: block.item });
-                      }}
-                      onDragEnd={() => {
-                    setDragPayload(null);
-                    setDragOverKey(null);
-                    setDragPreviewHour(null);
-                  }}
+                      onGrab={() => setDragPayload({ kind: "task", task: block.item })}
+                      onMove={handlePointerMove}
+                      onDrop={handlePointerDrop}
+                      onCancel={clearDrag}
                     />
                   </div>
                 );
@@ -456,27 +621,17 @@ export function HourGrid({
               const event = block.item;
               const colorToken = resolveEventColorToken(event, colorByCalendar);
               return (
-                <div
+                <TimedEventBlock
                   key={`event-${event.id}`}
-                  className={`wg-event ${colorToken}`}
+                  event={event}
+                  colorToken={colorToken}
                   style={blockStyle}
-                  draggable
-                  onDragStart={(dragEvent) => {
-                    dragEvent.dataTransfer.setData("text/plain", event.id);
-                    dragEvent.dataTransfer.effectAllowed = "move";
-                    setDragPayload({ kind: "event", event, grabDay: day });
-                  }}
-                  onDragEnd={() => {
-                    setDragPayload(null);
-                    setDragOverKey(null);
-                    setDragPreviewHour(null);
-                  }}
-                  onClick={() => openEditEvent(event)}
-                >
-                  <span className="et">{event.summary}</span>
-                  {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
-                  <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>
-                </div>
+                  onOpenEdit={() => openEditEvent(event)}
+                  onGrab={() => setDragPayload({ kind: "event", event, grabDay: day })}
+                  onMove={handlePointerMove}
+                  onDrop={handlePointerDrop}
+                  onCancel={clearDrag}
+                />
               );
             })}
 

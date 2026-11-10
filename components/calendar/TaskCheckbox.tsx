@@ -90,9 +90,12 @@ export function TaskCheckbox({
    * direct sibling of the checkbox `<input>`, never its ancestor, so a
    * caller that doesn't pass this prop (e.g. `AgendaView`) gets no drag
    * handling at all, and one that does never makes the checkbox itself a
-   * drag handle.
+   * drag handle. Excludes `isDragging` — `usePointerDrag`'s other field,
+   * not a DOM handler — so a caller that builds this via `{...drag, ...}`
+   * can't accidentally let it ride along into the `{...dragHandlers}` spread
+   * below and land on the title `<span>` as a stray DOM attribute.
    */
-  dragHandlers?: ReturnType<typeof usePointerDrag>;
+  dragHandlers?: Omit<ReturnType<typeof usePointerDrag>, "isDragging">;
 }) {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);

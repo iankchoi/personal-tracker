@@ -123,20 +123,29 @@ function MonthTaskEntry({
   onDrop(clientX: number, clientY: number): void;
   onCancel(): void;
 }) {
-  const drag = usePointerDrag({ onClick: () => onTitleClick(task), onMove, onDrop });
+  // Named, not `{...drag}` below: TaskCheckbox's `dragHandlers` prop spreads
+  // straight onto a DOM `<span>`, so pulling in the full `usePointerDrag`
+  // return (which also carries `isDragging`) would leak a stray attribute
+  // (see TaskCheckbox's own doc comment).
+  const { onPointerDown, onPointerMove, onPointerUp, onPointerCancel } = usePointerDrag({
+    onClick: () => onTitleClick(task),
+    onMove,
+    onDrop,
+  });
 
   return (
     <TaskCheckbox
       task={task}
       dragHandlers={{
-        ...drag,
         onPointerDown: (pointerEvent) => {
           onGrab();
-          drag.onPointerDown(pointerEvent);
+          onPointerDown(pointerEvent);
         },
+        onPointerMove,
+        onPointerUp,
         onPointerCancel: () => {
           onCancel();
-          drag.onPointerCancel();
+          onPointerCancel();
         },
       }}
     />

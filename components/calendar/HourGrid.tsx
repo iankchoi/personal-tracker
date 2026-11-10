@@ -471,11 +471,11 @@ export function HourGrid({
       return;
     }
     if (hit.lane === "allday") {
-      setDragOverKey(`${hit.day.getTime()}-allday`);
+      setDragOverKey(`${formatDateParam(hit.day)}-allday`);
       setDragPreviewHour(null);
       return;
     }
-    setDragOverKey(`${hit.day.getTime()}-timed`);
+    setDragOverKey(`${formatDateParam(hit.day)}-timed`);
     setDragPreviewHour(hourFromDropOffset(hit.offsetY));
   }
 
@@ -532,7 +532,7 @@ export function HourGrid({
       ))}
 
       {days.map((day, index) => {
-        const alldayKey = `${day.getTime()}-allday`;
+        const alldayKey = `${formatDateParam(day)}-allday`;
         return (
           <div
             key={day.getTime()}
@@ -584,7 +584,7 @@ export function HourGrid({
         // `dateTime`, which carries its own offset (see calendar-dates.ts).
         const nowTop = isToday ? (fractionalHour(localParts(now)) - GRID_START_HOUR) * HOUR_ROW_HEIGHT : null;
 
-        const colKey = `${day.getTime()}-timed`;
+        const colKey = `${formatDateParam(day)}-timed`;
 
         return (
           <div

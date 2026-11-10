@@ -29,6 +29,13 @@ const colorByCalendar: Record<string, CalendarColorToken> = { primary: "cal" };
 /** Oct 19–25, 2026 — spans both an all-day event's own day (20) and the drop target (25) in one visible week. */
 const sevenDays = Array.from({ length: 7 }, (_, i) => new Date(2026, 9, 19 + i));
 const oneDay = new Date(2026, 9, 20);
+/**
+ * Same calendar day as `oneDay`, but NOT exactly local midnight — reproducing
+ * what `DayView`/`app/(app)/calendar/page.tsx` can pass as `referenceDate`
+ * when the `date` URL param is missing or malformed (falling back to
+ * `new Date()`, i.e. the current wall-clock time).
+ */
+const oneDayNonMidnight = new Date(2026, 9, 20, 13, 45, 30);
 
 function allDayEvent({
   id,
@@ -114,7 +121,7 @@ function fireDragTo(
 ) {
   const originalElementFromPoint = document.elementFromPoint;
   document.elementFromPoint = () => hitElement;
-  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1, isPrimary: true });
   fireEvent.pointerMove(source, { clientX, clientY, pointerId: 1 });
   fireEvent.pointerUp(source, { clientX, clientY, pointerId: 1 });
   document.elementFromPoint = originalElementFromPoint;
@@ -209,7 +216,7 @@ test("dragging a timed event within its own day column to a new time changes sta
   const originalElementFromPoint = document.elementFromPoint;
   document.elementFromPoint = () => column;
   const source = screen.getByText("Standup");
-  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1, isPrimary: true });
   fireEvent.pointerMove(source, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 }); // -> 2 PM
   fireEvent.pointerUp(source, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
   document.elementFromPoint = originalElementFromPoint;
@@ -254,12 +261,29 @@ test("dragging over the timed grid shows a drop indicator snapped to the nearest
   const originalElementFromPoint = document.elementFromPoint;
   document.elementFromPoint = () => column;
   // 7 * HOUR_ROW_HEIGHT (= 2 PM exactly) + 20px of "slop" — snaps to 2:15 PM, not 2:06ish.
-  fireEvent.pointerDown(screen.getByText("Standup"), { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerDown(screen.getByText("Standup"), { clientX: 0, clientY: 0, pointerId: 1, isPrimary: true });
   fireEvent.pointerMove(screen.getByText("Standup"), { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT + 20, pointerId: 1 });
   document.elementFromPoint = originalElementFromPoint;
   const indicator = column.querySelector(".wg-drop-indicator") as HTMLElement;
   expect(indicator).not.toBeNull();
   expect(indicator.style.top).toBe(`${7.25 * HOUR_ROW_HEIGHT}px`);
+});
+
+test("the drop indicator still appears when the `days` prop is not exactly local midnight", () => {
+  // `hitTest` round-trips through `data-day` (via formatDateParam/parseDateParam), which always
+  // comes back at local midnight — so if the keying scheme compares `day.getTime()` instead of the
+  // formatted date string, a non-midnight `days[0]` (what DayView/page.tsx can produce) makes the
+  // "set" and "read" sides of dragOverKey/dragPreviewHour disagree and the indicator never renders.
+  render(<Harness days={[oneDayNonMidnight]} events={[timedEvent({ id: "e1" })]} />);
+  const column = dayColumn();
+  column.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
+  const originalElementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => column;
+  fireEvent.pointerDown(screen.getByText("Standup"), { clientX: 0, clientY: 0, pointerId: 1, isPrimary: true });
+  fireEvent.pointerMove(screen.getByText("Standup"), { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
+  document.elementFromPoint = originalElementFromPoint;
+  expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
 });
 
 test("completing a drop clears the drop indicator", () => {
@@ -274,7 +298,7 @@ test("completing a drop clears the drop indicator", () => {
   const originalElementFromPoint = document.elementFromPoint;
   document.elementFromPoint = () => column;
   const source = screen.getByText("Standup");
-  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1, isPrimary: true });
   fireEvent.pointerMove(source, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
   expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
 
@@ -299,7 +323,7 @@ test("the drop indicator still resolves to the column when the hit-tested elemen
   const originalElementFromPoint = document.elementFromPoint;
   document.elementFromPoint = () => childLine;
 
-  fireEvent.pointerDown(screen.getByText("Standup"), { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerDown(screen.getByText("Standup"), { clientX: 0, clientY: 0, pointerId: 1, isPrimary: true });
   fireEvent.pointerMove(screen.getByText("Standup"), { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT, pointerId: 1 });
   document.elementFromPoint = originalElementFromPoint;
 

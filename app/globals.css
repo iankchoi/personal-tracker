@@ -207,6 +207,11 @@ a { color: inherit; text-decoration: none; }
 .wg-event.cv { border-left: 3px solid var(--cv-accent); }
 .wg-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--cal-accent); z-index: 2; }
 .wg-now::before { content: ""; position: absolute; left: -4px; top: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--cal-accent); }
+/* The quarter-hour slot a drag is currently snapped to — see HourGrid's
+   `dragPreviewHour`. Dashed and above every block (including the dragged
+   one's own now-stale position) so it reads as "here's where this will
+   land", not as another event. */
+.wg-drop-indicator { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--text); z-index: 3; pointer-events: none; }
 
 /* ---- day view: the hour grid pairs with a rail (mini month + up next) ---- */
 .day-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; }

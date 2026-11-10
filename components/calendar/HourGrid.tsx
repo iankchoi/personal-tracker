@@ -187,6 +187,13 @@ export function HourGrid({
   const router = useRouter();
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  // The quarter-hour slot the pointer is currently over in the timed grid —
+  // native HTML5 drag can't be made to snap the dragged block's own ghost
+  // image (that's rendered by the browser, outside JS's reach), so this
+  // drives a separate indicator line instead: the practical equivalent of
+  // "always know what time you're about to drop on" without fighting the
+  // platform. `null` whenever the pointer isn't over a timed column.
+  const [dragPreviewHour, setDragPreviewHour] = useState<number | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
 
   async function handleAllDayDrop(day: Date) {
@@ -325,7 +332,10 @@ export function HourGrid({
                     dragEvent.dataTransfer.effectAllowed = "move";
                     setDragPayload({ kind: "event", event, grabDay: day });
                   }}
-                  onDragEnd={() => setDragPayload(null)}
+                  onDragEnd={() => {
+                    setDragPayload(null);
+                    setDragPreviewHour(null);
+                  }}
                   onClick={() => openEditEvent(event)}
                 >
                   {event.summary}
@@ -343,7 +353,10 @@ export function HourGrid({
                   dragEvent.dataTransfer.effectAllowed = "move";
                   setDragPayload({ kind: "task", task });
                 }}
-                onDragEnd={() => setDragPayload(null)}
+                onDragEnd={() => {
+                    setDragPayload(null);
+                    setDragPreviewHour(null);
+                  }}
               />
             ))}
           </div>
@@ -372,13 +385,19 @@ export function HourGrid({
             data-testid="wg-col"
             style={{ gridColumn: index + 2 }}
             onDragEnter={() => setDragOverKey(colKey)}
-            onDragLeave={() => setDragOverKey((current) => (current === colKey ? null : current))}
+            onDragLeave={() => {
+              setDragOverKey((current) => (current === colKey ? null : current));
+              setDragPreviewHour(null);
+            }}
             onDragOver={(event) => {
               event.preventDefault();
               event.dataTransfer.dropEffect = "move";
+              const offsetY = event.clientY - event.currentTarget.getBoundingClientRect().top;
+              setDragPreviewHour(hourFromDropOffset(offsetY));
             }}
             onDrop={(event) => {
               event.preventDefault();
+              setDragPreviewHour(null);
               const offsetY = event.clientY - event.currentTarget.getBoundingClientRect().top;
               void handleTimedDrop(day, offsetY);
             }}
@@ -386,6 +405,13 @@ export function HourGrid({
             {GRID_HOURS.map((hour) => (
               <div key={hour} className="wg-line" onClick={() => openCreate("event", day, hour)} />
             ))}
+
+            {dragOverKey === colKey && dragPreviewHour !== null && (
+              <div
+                className="wg-drop-indicator"
+                style={{ top: (dragPreviewHour - GRID_START_HOUR) * HOUR_ROW_HEIGHT }}
+              />
+            )}
 
             {/* Events and timed tasks come out of one combined layout pass,
                 so each gets a real column instead of tasks stacking on top of
@@ -406,7 +432,10 @@ export function HourGrid({
                         dragEvent.dataTransfer.effectAllowed = "move";
                         setDragPayload({ kind: "task", task: block.item });
                       }}
-                      onDragEnd={() => setDragPayload(null)}
+                      onDragEnd={() => {
+                    setDragPayload(null);
+                    setDragPreviewHour(null);
+                  }}
                     />
                   </div>
                 );
@@ -425,7 +454,10 @@ export function HourGrid({
                     dragEvent.dataTransfer.effectAllowed = "move";
                     setDragPayload({ kind: "event", event, grabDay: day });
                   }}
-                  onDragEnd={() => setDragPayload(null)}
+                  onDragEnd={() => {
+                    setDragPayload(null);
+                    setDragPreviewHour(null);
+                  }}
                   onClick={() => openEditEvent(event)}
                 >
                   <span className="et">{event.summary}</span>

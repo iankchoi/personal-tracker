@@ -158,6 +158,25 @@ function fireDropAt(source: HTMLElement, target: HTMLElement, { offsetY }: { off
   fireEvent(target, dropEvent);
 }
 
+/** Like `fireDropAt`, but stops after `dragenter`/`dragover` — for inspecting mid-drag feedback (the drop indicator) before any drop actually happens. */
+function dragOverAt(source: HTMLElement, target: HTMLElement, { offsetY }: { offsetY: number }) {
+  target.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
+  const dataTransfer = fakeDataTransfer();
+
+  const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+  Object.assign(dragStart, { dataTransfer });
+  fireEvent(source, dragStart);
+
+  const dragEnter = new Event("dragenter", { bubbles: true, cancelable: true });
+  Object.assign(dragEnter, { dataTransfer });
+  fireEvent(target, dragEnter);
+
+  const dragOver = new Event("dragover", { bubbles: true, cancelable: true });
+  Object.assign(dragOver, { dataTransfer, clientY: offsetY });
+  fireEvent(target, dragOver);
+}
+
 afterEach(() => {
   cleanup();
   mockRefresh.mockReset();
@@ -259,6 +278,25 @@ test("dragging a timed event to a new time never resends its color, reminders, M
   expect(call.notifyMinutesBefore).toBeUndefined();
   expect(call.addGoogleMeet).toBeUndefined();
   expect(call.guestEmails).toBeUndefined();
+});
+
+test("dragging over the timed grid shows a drop indicator snapped to the nearest quarter hour, not the raw pointer position", () => {
+  render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
+  // 7 * HOUR_ROW_HEIGHT (= 2 PM exactly) + 20px of "slop" — snaps to 2:15 PM, not 2:06ish.
+  dragOverAt(screen.getByText("Standup"), dayColumn(), { offsetY: 7 * HOUR_ROW_HEIGHT + 20 });
+  const indicator = dayColumn().querySelector(".wg-drop-indicator") as HTMLElement;
+  expect(indicator).not.toBeNull();
+  expect(indicator.style.top).toBe(`${7.25 * HOUR_ROW_HEIGHT}px`);
+});
+
+test("leaving the timed grid clears the drop indicator", () => {
+  render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
+  const column = dayColumn();
+  dragOverAt(screen.getByText("Standup"), column, { offsetY: 7 * HOUR_ROW_HEIGHT });
+  expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
+
+  fireEvent(column, new Event("dragleave", { bubbles: true, cancelable: true }));
+  expect(column.querySelector(".wg-drop-indicator")).toBeNull();
 });
 
 test("dragging a timed task to a new time sets a quarter-hour dueTime", async () => {

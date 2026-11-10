@@ -197,6 +197,25 @@ test("dragging a task's checkbox does not start a drag", () => {
   expect(mockUpdateTaskAction).not.toHaveBeenCalled();
 });
 
+test("dragging a task's title onto a different day cell calls updateTaskAction and refreshes", async () => {
+  render(<Harness tasks={[calendarTask({ id: "t1", dueDate: "2026-10-22" })]} />);
+  fireDragTo(screen.getByText("Errand"), "2026-10-23");
+  await vi.waitFor(() => expect(mockUpdateTaskAction).toHaveBeenCalled());
+  expect(mockUpdateTaskAction).toHaveBeenCalledWith(
+    expect.objectContaining({ taskId: "t1", dueDate: "2026-10-23" }),
+  );
+  expect(mockRefresh).toHaveBeenCalled();
+});
+
+test("clicking a task's title without moving the pointer opens its editor, not a reschedule", () => {
+  render(<Harness tasks={[calendarTask({ id: "t1" })]} />);
+  const title = screen.getByText("Errand");
+  fireEvent.pointerDown(title, { clientX: 10, clientY: 10, pointerId: 1 });
+  fireEvent.pointerUp(title, { clientX: 10, clientY: 10, pointerId: 1 });
+  expect(mockUpdateTaskAction).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog", { name: /edit task/i })).toBeInTheDocument();
+});
+
 test("a failed drop shows an inline error and leaves the event where it was", async () => {
   mockUpdateEventAction.mockRejectedValueOnce(new Error("boom"));
   render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);

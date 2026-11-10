@@ -55,9 +55,23 @@ function formatTaskTime(dueTime: string): string {
  * `onTitleClick`, when given, fires when the title text (not the checkbox
  * itself) is clicked — Part 2's calendar views pass `openEditTask` so clicking
  * a task's title opens the editor, while clicking its checkbox always stays a
- * pure complete-toggle. The title's click handler calls `preventDefault` so
+ * pure complete-toggle. The title's native `onClick` calls `preventDefault` so
  * the browser's native "clicking inside a `<label>` activates its control"
- * behavior doesn't also flip the checkbox.
+ * behavior doesn't also flip the checkbox, and `stopPropagation` so the click
+ * doesn't bubble into an ancestor cell's own click-to-create handler.
+ *
+ * When `dragHandlers` is supplied (Month view, Week/Day view), `onTitleClick`
+ * is instead invoked from the caller's `usePointerDrag({ onClick: ... })`
+ * option, exactly like the event chip's own click-vs-drag handling — never
+ * from this native `onClick`. That split matters: `usePointerDrag`'s
+ * `onPointerDown` calls `setPointerCapture`, and a captured element is where
+ * browsers retarget the *trailing* compatibility `click` event even after a
+ * real drag ends somewhere else on the page. If this native `onClick` also
+ * called `onTitleClick` unconditionally, a real drag-to-reschedule would
+ * reopen the task editor right after the drop, since that trailing `click`
+ * still lands here. The `preventDefault`/`stopPropagation` pair still has to
+ * run unconditionally, drag or not — nothing else suppresses that trailing
+ * click from flipping the checkbox or bubbling up.
  */
 export function TaskCheckbox({
   task,
@@ -117,16 +131,19 @@ export function TaskCheckbox({
         className={task.completed ? "task-title task-done" : "task-title"}
         {...dragHandlers}
         onClick={
-          onTitleClick
+          onTitleClick || dragHandlers
             ? (event) => {
-                // `preventDefault` stops the label's native "clicking inside
-                // it activates its control" behavior from also toggling the
-                // checkbox; `stopPropagation` keeps the click from bubbling
-                // into an ancestor cell's own click-to-create handler (e.g.
-                // Month view's `.mg-cell`), which would otherwise fire too.
+                // Must run unconditionally — drag or not, clicked or
+                // dropped — see the doc comment above for why.
                 event.preventDefault();
                 event.stopPropagation();
-                onTitleClick(task);
+                // Drag-aware callers drive `onTitleClick` through
+                // `usePointerDrag`'s own `onClick` option instead; calling it
+                // here too would double-fire it after a real drag, since
+                // this native click trails behind that drag's `pointerup`.
+                if (!dragHandlers) {
+                  onTitleClick?.(task);
+                }
               }
             : undefined
         }

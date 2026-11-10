@@ -102,11 +102,11 @@ function MonthEventChip({
 
 /**
  * One task entry, mirroring `MonthEventChip` above for the same
- * one-hook-call-per-instance reason. Its `usePointerDrag.onClick` is a
- * no-op: `TaskCheckbox`'s own `onClick` (unchanged by this task) already
- * handles a plain tap via the native `click` event the browser fires after
- * a non-dragging pointerdown/pointerup pair, so there's nothing left for the
- * pointer-tracking `onClick` option to do.
+ * one-hook-call-per-instance reason, and its click-vs-drag handling too:
+ * `onTitleClick` is wired into `usePointerDrag`'s `onClick` option (fired on
+ * a non-dragging pointerup), not into `TaskCheckbox`'s own native `onClick`
+ * — see that component's doc comment for why a drag-aware caller can't let
+ * both paths call it.
  */
 function MonthTaskEntry({
   task,
@@ -123,12 +123,11 @@ function MonthTaskEntry({
   onDrop(clientX: number, clientY: number): void;
   onCancel(): void;
 }) {
-  const drag = usePointerDrag({ onClick: () => {}, onMove, onDrop });
+  const drag = usePointerDrag({ onClick: () => onTitleClick(task), onMove, onDrop });
 
   return (
     <TaskCheckbox
       task={task}
-      onTitleClick={onTitleClick}
       dragHandlers={{
         ...drag,
         onPointerDown: (pointerEvent) => {

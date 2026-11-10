@@ -287,22 +287,7 @@ export function HourGrid({
           </button>
         </div>
       )}
-      <div
-        className={gridClassName}
-        onDragLeave={(event) => {
-          // Only clear when the pointer has actually left the whole grid —
-          // checked via relatedTarget containment, not this event firing at
-          // all, since dragleave also fires on every internal child boundary
-          // crossed (see the dragover comments below). Without this check,
-          // dragging out through the hour-label gutter or past the last
-          // column would otherwise leave the previous column's indicator
-          // stuck on screen with nothing left to clear it.
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setDragOverKey(null);
-            setDragPreviewHour(null);
-          }
-        }}
-      >
+      <div className={gridClassName}>
       <div className="wg-corner" />
 
       {days.map((day, index) => (
@@ -354,6 +339,7 @@ export function HourGrid({
                   }}
                   onDragEnd={() => {
                     setDragPayload(null);
+                    setDragOverKey(null);
                     setDragPreviewHour(null);
                   }}
                   onClick={() => openEditEvent(event)}
@@ -375,6 +361,7 @@ export function HourGrid({
                 }}
                 onDragEnd={() => {
                     setDragPayload(null);
+                    setDragOverKey(null);
                     setDragPreviewHour(null);
                   }}
               />
@@ -458,6 +445,7 @@ export function HourGrid({
                       }}
                       onDragEnd={() => {
                     setDragPayload(null);
+                    setDragOverKey(null);
                     setDragPreviewHour(null);
                   }}
                     />
@@ -480,6 +468,7 @@ export function HourGrid({
                   }}
                   onDragEnd={() => {
                     setDragPayload(null);
+                    setDragOverKey(null);
                     setDragPreviewHour(null);
                   }}
                   onClick={() => openEditEvent(event)}

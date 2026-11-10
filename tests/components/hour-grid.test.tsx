@@ -289,14 +289,20 @@ test("dragging over the timed grid shows a drop indicator snapped to the nearest
   expect(indicator.style.top).toBe(`${7.25 * HOUR_ROW_HEIGHT}px`);
 });
 
-test("leaving the whole grid (relatedTarget outside it) clears the drop indicator", () => {
+test("ending the drag (dragend) clears the drop indicator", () => {
+  // Not dragleave: this grid deliberately has no dragenter/dragleave handlers at all.
+  // Safari is documented to be unreliable about populating `relatedTarget` on drag
+  // events, which is exactly the property a dragleave-based "did we really leave"
+  // check would depend on — a dependency that would silently degrade back into the
+  // same flicker-to-invisible bug this feature already hit once, but only in Safari.
+  // dragover (set) and dragend/drop (clear) are the two events every browser agrees on.
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
+  const source = screen.getByText("Standup");
   const column = dayColumn();
-  dragOverAt(screen.getByText("Standup"), column, { offsetY: 7 * HOUR_ROW_HEIGHT });
+  dragOverAt(source, column, { offsetY: 7 * HOUR_ROW_HEIGHT });
   expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
 
-  // No relatedTarget set — reads as "left to nowhere this grid can see", same as leaving the page entirely.
-  fireEvent(column, new Event("dragleave", { bubbles: true, cancelable: true }));
+  fireEvent(source, new Event("dragend", { bubbles: true, cancelable: true }));
   expect(column.querySelector(".wg-drop-indicator")).toBeNull();
 });
 

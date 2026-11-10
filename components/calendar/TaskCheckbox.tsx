@@ -1,11 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type DragEvent } from "react";
+import { useState } from "react";
 
 import { completeTaskAction } from "../../lib/actions/calendar-tasks";
 import type { CalendarColorToken } from "../../lib/calendar-colors";
 import type { CalendarTaskItem } from "../../lib/calendar-tasks-for-grid";
+import type { usePointerDrag } from "./usePointerDrag";
 
 /** Fallback color token for a task with no metadata row yet, matching the `FALLBACK_COLOR_TOKEN` convention events use elsewhere in this codebase. */
 const FALLBACK_COLOR_TOKEN: CalendarColorToken = "cal";
@@ -61,24 +62,23 @@ function formatTaskTime(dueTime: string): string {
 export function TaskCheckbox({
   task,
   onTitleClick,
-  draggable,
-  onDragStart,
-  onDragEnd,
+  dragHandlers,
 }: {
   task: CalendarTaskItem;
   onTitleClick?(task: CalendarTaskItem): void;
   /**
-   * Opt-in drag source for callers that support drag-to-reschedule (Month
-   * view's day cells, the Week/Day hour grid's columns). Applied to the
-   * title `<span>` rather than the outer `<label>` — the title is a direct
-   * sibling of the checkbox `<input>`, never its ancestor, so a caller that
-   * doesn't pass these props (e.g. `AgendaView`) gets no draggable element
-   * at all, and one that does never makes the checkbox itself draggable.
+   * Opt-in pointer-drag source for callers that support drag-to-reschedule
+   * (Month view's day cells, the Week/Day hour grid's columns) — the four
+   * handlers `usePointerDrag` returns, computed by the caller (which owns
+   * the per-gesture "what's being dragged" state) and spread onto this same
+   * title `<span>` that used to carry `draggable`/`onDragStart`/`onDragEnd`.
+   * Applied to the title rather than the outer `<label>` — the title is a
+   * direct sibling of the checkbox `<input>`, never its ancestor, so a
+   * caller that doesn't pass this prop (e.g. `AgendaView`) gets no drag
+   * handling at all, and one that does never makes the checkbox itself a
+   * drag handle.
    */
-  draggable?: boolean;
-  onDragStart?(event: DragEvent<HTMLSpanElement>): void;
-  /** Fires on drag end (drop or cancel) regardless of outcome — callers use this to clear any "what's being dragged" state so an aborted drag can't be picked up by a later, unrelated drop. */
-  onDragEnd?(event: DragEvent<HTMLSpanElement>): void;
+  dragHandlers?: ReturnType<typeof usePointerDrag>;
 }) {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);
@@ -115,9 +115,7 @@ export function TaskCheckbox({
       />
       <span
         className={task.completed ? "task-title task-done" : "task-title"}
-        draggable={draggable}
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
+        {...dragHandlers}
         onClick={
           onTitleClick
             ? (event) => {

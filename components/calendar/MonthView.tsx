@@ -13,6 +13,7 @@ import {
   formatTimeLabel,
   isSameLocalDay,
   isSameLocalMonth,
+  parseDateParam,
 } from "@/lib/calendar-dates";
 import type { EventActionInput } from "@/lib/actions/calendar-events";
 import type { TaskActionInput } from "@/lib/actions/calendar-tasks";
@@ -26,16 +27,24 @@ import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
+import { usePointerDrag } from "./usePointerDrag";
+
+/** Resolves a pointer position to the `.mg-cell` underneath it (via its `data-day`), or `null` if the pointer is over no cell at all — the pointer-event replacement for native DnD's drop-target element. */
+function dayFromPoint(clientX: number, clientY: number): Date | null {
+  const cell = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-day]");
+  return cell ? parseDateParam(cell.dataset.day!) : null;
+}
 
 /**
- * What's currently being dragged, set on `dragstart` and read back on
- * `drop` — native HTML5 DnD carries no typed payload of its own, so this
- * app-level state stands in for `dataTransfer`. `grabDay` is the day whose
- * *cell* the drag actually started from — a multi-day all-day event renders
- * a chip in every day it spans, so this is not always the event's own start
- * day, and `shiftEventToDay` needs the real grab point to nudge the event by
- * the gesture's actual day delta instead of re-anchoring its start on the
- * drop target.
+ * What's currently being dragged, set on `pointerdown` (via each chip's
+ * `onGrab`) and read back on drop — pointer events carry no typed payload of
+ * their own any more than native HTML5 DnD's `dataTransfer` did, so this
+ * app-level state fills the same role. `grabDay` is the day whose *cell* the
+ * drag actually started from — a multi-day all-day event renders a chip in
+ * every day it spans, so this is not always the event's own start day, and
+ * `shiftEventToDay` needs the real grab point to nudge the event by the
+ * gesture's actual day delta instead of re-anchoring its start on the drop
+ * target.
  */
 type DragPayload =
   | { kind: "event"; event: GoogleCalendarEvent; grabDay: Date }
@@ -46,6 +55,94 @@ const MAX_VISIBLE_CHIPS = 3;
 
 /** A cell's event chips and task checkboxes merged into one orderable list, so overflow counting (`MAX_VISIBLE_CHIPS`) treats both uniformly. */
 type DayEntry = { kind: "event"; event: GoogleCalendarEvent } | { kind: "task"; task: CalendarTaskItem };
+
+/**
+ * One event chip, factored out of `MonthView`'s render so `usePointerDrag` —
+ * a hook — has a stable call site: the number of chips varies per cell and
+ * across renders, so calling it directly inside the `.map()` that lays them
+ * out would call it a different number of times from one render to the next.
+ */
+function MonthEventChip({
+  event,
+  colorToken,
+  onOpenEdit,
+  onGrab,
+  onMove,
+  onDrop,
+  onCancel,
+}: {
+  event: GoogleCalendarEvent;
+  colorToken: CalendarColorToken;
+  onOpenEdit(): void;
+  onGrab(): void;
+  onMove(clientX: number, clientY: number): void;
+  onDrop(clientX: number, clientY: number): void;
+  onCancel(): void;
+}) {
+  const drag = usePointerDrag({ onClick: onOpenEdit, onMove, onDrop });
+
+  return (
+    <span
+      className={`mg-chip ${colorToken}`}
+      {...drag}
+      onPointerDown={(pointerEvent) => {
+        onGrab();
+        drag.onPointerDown(pointerEvent);
+      }}
+      onPointerCancel={() => {
+        onCancel();
+        drag.onPointerCancel();
+      }}
+    >
+      {event.start.dateTime && <span className="mg-chip-time">{formatTimeLabel(event.start.dateTime)}</span>}
+      {event.summary}
+    </span>
+  );
+}
+
+/**
+ * One task entry, mirroring `MonthEventChip` above for the same
+ * one-hook-call-per-instance reason. Its `usePointerDrag.onClick` is a
+ * no-op: `TaskCheckbox`'s own `onClick` (unchanged by this task) already
+ * handles a plain tap via the native `click` event the browser fires after
+ * a non-dragging pointerdown/pointerup pair, so there's nothing left for the
+ * pointer-tracking `onClick` option to do.
+ */
+function MonthTaskEntry({
+  task,
+  onTitleClick,
+  onGrab,
+  onMove,
+  onDrop,
+  onCancel,
+}: {
+  task: CalendarTaskItem;
+  onTitleClick(task: CalendarTaskItem): void;
+  onGrab(): void;
+  onMove(clientX: number, clientY: number): void;
+  onDrop(clientX: number, clientY: number): void;
+  onCancel(): void;
+}) {
+  const drag = usePointerDrag({ onClick: () => {}, onMove, onDrop });
+
+  return (
+    <TaskCheckbox
+      task={task}
+      onTitleClick={onTitleClick}
+      dragHandlers={{
+        ...drag,
+        onPointerDown: (pointerEvent) => {
+          onGrab();
+          drag.onPointerDown(pointerEvent);
+        },
+        onPointerCancel: () => {
+          onCancel();
+          drag.onPointerCancel();
+        },
+      }}
+    />
+  );
+}
 
 /**
  * Month view: ports the mockup's `.month-grid`/`.mg-dow-row`/`.mg-weeks`/
@@ -130,6 +227,27 @@ export function MonthView({
     }
   }
 
+  // Mirrors the old `onDragEnter`'s day-cell highlight, driven by hit-testing
+  // instead of a native dragenter target.
+  function handlePointerMove(clientX: number, clientY: number) {
+    setDragOverDay(dayFromPoint(clientX, clientY)?.getTime() ?? null);
+  }
+
+  function handlePointerDrop(clientX: number, clientY: number) {
+    const day = dayFromPoint(clientX, clientY);
+    if (day) {
+      void handleDrop(day);
+    }
+  }
+
+  // Mirrors the old `onDragEnd`'s unconditional reset — fires when a drag is
+  // aborted (pointercancel) rather than dropped, so it can't be picked up by
+  // a later, unrelated drop.
+  function clearDrag() {
+    setDragPayload(null);
+    setDragOverDay(null);
+  }
+
   return (
     <div className="month-grid">
       {dragError && (
@@ -169,17 +287,8 @@ export function MonthView({
                 <div
                   className={classes.join(" ")}
                   key={day.getTime()}
+                  data-day={formatDateParam(day)}
                   onClick={() => openCreate("event", day)}
-                  onDragEnter={() => setDragOverDay(day.getTime())}
-                  onDragLeave={() => setDragOverDay((current) => (current === day.getTime() ? null : current))}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    void handleDrop(day);
-                  }}
                 >
                   <span className="mg-date">{day.getDate()}</span>
                   {entries.length > 0 && (
@@ -191,39 +300,29 @@ export function MonthView({
                       {visibleEntries.map((entry) => {
                         if (entry.kind === "task") {
                           return (
-                            <TaskCheckbox
+                            <MonthTaskEntry
                               key={entry.task.id}
                               task={entry.task}
                               onTitleClick={openEditTask}
-                              draggable
-                              onDragStart={(event) => {
-                                event.dataTransfer.setData("text/plain", entry.task.id);
-                                event.dataTransfer.effectAllowed = "move";
-                                setDragPayload({ kind: "task", task: entry.task });
-                              }}
-                              onDragEnd={() => setDragPayload(null)}
+                              onGrab={() => setDragPayload({ kind: "task", task: entry.task })}
+                              onMove={handlePointerMove}
+                              onDrop={handlePointerDrop}
+                              onCancel={clearDrag}
                             />
                           );
                         }
                         const colorToken = resolveEventColorToken(entry.event, colorByCalendar);
                         return (
-                          <span
+                          <MonthEventChip
                             key={entry.event.id}
-                            className={`mg-chip ${colorToken}`}
-                            draggable
-                            onDragStart={(event) => {
-                              event.dataTransfer.setData("text/plain", entry.event.id);
-                              event.dataTransfer.effectAllowed = "move";
-                              setDragPayload({ kind: "event", event: entry.event, grabDay: day });
-                            }}
-                            onDragEnd={() => setDragPayload(null)}
-                            onClick={() => openEditEvent(entry.event)}
-                          >
-                            {entry.event.start.dateTime && (
-                              <span className="mg-chip-time">{formatTimeLabel(entry.event.start.dateTime)}</span>
-                            )}
-                            {entry.event.summary}
-                          </span>
+                            event={entry.event}
+                            colorToken={colorToken}
+                            onOpenEdit={() => openEditEvent(entry.event)}
+                            onGrab={() => setDragPayload({ kind: "event", event: entry.event, grabDay: day })}
+                            onMove={handlePointerMove}
+                            onDrop={handlePointerDrop}
+                            onCancel={clearDrag}
+                          />
                         );
                       })}
                       {overflowCount > 0 && (

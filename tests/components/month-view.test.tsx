@@ -82,37 +82,22 @@ function Harness({ events = [], tasks = [] }: { events?: GoogleCalendarEvent[]; 
 }
 
 /**
- * A minimal stand-in for the browser's `DataTransfer`, which jsdom doesn't
- * implement at all (no `DragEvent` constructor either — see `fireDrop`).
- * Only the members the production handlers actually call.
+ * Simulates a pointer-driven drag-to-reschedule gesture: press on `source`,
+ * move past `usePointerDrag`'s 4px threshold, release. `document.elementFromPoint`
+ * is stubbed for the gesture's duration to resolve to a synthetic element
+ * carrying `data-day={hitDataDay}` — standing in for whatever `.mg-cell` the
+ * pointer would land on in a real browser, which jsdom's layout engine can't
+ * tell us (it does no layout at all).
  */
-function fakeDataTransfer() {
-  return { setData: () => {}, effectAllowed: "none", dropEffect: "none" };
-}
-
-/**
- * Dispatches the minimal native-DnD event sequence (no library helper exists
- * here, and `@testing-library/dom`'s `fireEvent.dragStart`/`dragOver`/`drop`
- * shorthands can't be used as-is: this jsdom has no `DragEvent` constructor,
- * so their internal `createEvent` silently falls back to a plain `Event`
- * with no `dataTransfer` at all — exactly what the production handlers read
- * on every one of these three events). Each event is built by hand with a
- * `dataTransfer` attached, then dispatched through `fireEvent`'s generic
- * `(element, event)` form — the shorthand helpers' own act()-wrapping, which
- * raw `element.dispatchEvent` doesn't get, and which is what makes the next
- * dispatch in this same sequence see the state `dragstart`'s handler just set.
- */
-function fireDrop(source: HTMLElement, target: HTMLElement) {
-  const dataTransfer = fakeDataTransfer();
-  for (const [element, type] of [
-    [source, "dragstart"],
-    [target, "dragover"],
-    [target, "drop"],
-  ] as const) {
-    const event = new Event(type, { bubbles: true, cancelable: true });
-    Object.assign(event, { dataTransfer });
-    fireEvent(element, event);
-  }
+function fireDragTo(source: HTMLElement, hitDataDay: string) {
+  const target = document.createElement("div");
+  target.dataset.day = hitDataDay;
+  const originalElementFromPoint = document.elementFromPoint;
+  document.elementFromPoint = () => target;
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerMove(source, { clientX: 20, clientY: 20, pointerId: 1 }); // past the 4px threshold
+  fireEvent.pointerUp(source, { clientX: 20, clientY: 20, pointerId: 1 });
+  document.elementFromPoint = originalElementFromPoint;
 }
 
 /** The `.mg-cell` whose `.mg-date` shows `day` — unambiguous for Oct 2026's rendered grid (no overflow day from an adjacent month repeats 20 or 25). */
@@ -142,7 +127,7 @@ test("an all-day event's month chip has no time label", () => {
 
 test("dragging an event chip onto a different day cell calls updateEventAction with that day's date and refreshes", async () => {
   render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
-  fireDrop(screen.getByText("Standup"), cellForDay(25));
+  fireDragTo(screen.getByText("Standup"), "2026-10-25");
   await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
   expect(mockUpdateEventAction).toHaveBeenCalledWith(
     expect.objectContaining({ eventId: "e1", start: expect.stringContaining("10-25") }),
@@ -150,9 +135,18 @@ test("dragging an event chip onto a different day cell calls updateEventAction w
   expect(mockRefresh).toHaveBeenCalled();
 });
 
+test("clicking an event chip without moving the pointer opens its editor, not a reschedule", () => {
+  render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
+  const chip = screen.getByText("Standup");
+  fireEvent.pointerDown(chip, { clientX: 10, clientY: 10, pointerId: 1 });
+  fireEvent.pointerUp(chip, { clientX: 10, clientY: 10, pointerId: 1 });
+  expect(mockUpdateEventAction).not.toHaveBeenCalled();
+  expect(screen.getByLabelText(/description/i)).toBeInTheDocument(); // the event editor opened
+});
+
 test("dropping an item back on its own day cell is a no-op", async () => {
   render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
-  fireDrop(screen.getByText("Standup"), cellForDay(20));
+  fireDragTo(screen.getByText("Standup"), "2026-10-20");
   expect(mockUpdateEventAction).not.toHaveBeenCalled();
 });
 
@@ -169,7 +163,7 @@ test("dragging an event never resends its color, reminders, Meet link, or guests
     attendees: [{ email: "guest@example.com" }],
   };
   render(<Harness events={[event]} />);
-  fireDrop(screen.getByText("Standup"), cellForDay(25));
+  fireDragTo(screen.getByText("Standup"), "2026-10-25");
   await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
   const call = mockUpdateEventAction.mock.calls[0][0];
   expect(call.colorToken).toBeUndefined();
@@ -182,7 +176,7 @@ test("a multi-day all-day event dragged from a middle-day chip nudges by the ges
   // Oct 20-24 (exclusive end Oct 25) renders a chip in every one of those 5 days.
   render(<Harness events={[allDayEvent({ id: "e1", summary: "Conference", start: "2026-10-20", end: "2026-10-25" })]} />);
   // Grab the Oct 22 chip specifically and drop it one day over, on Oct 23 — a 1-day nudge.
-  fireDrop(within(cellForDay(22)).getByText("Conference"), cellForDay(23));
+  fireDragTo(within(cellForDay(22)).getByText("Conference"), "2026-10-23");
   await vi.waitFor(() =>
     expect(mockUpdateEventAction).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: "e1", start: "2026-10-21", end: "2026-10-26" }),
@@ -192,20 +186,21 @@ test("a multi-day all-day event dragged from a middle-day chip nudges by the ges
 
 test("dropping a multi-day event's middle-day chip back on that same cell is a no-op", async () => {
   render(<Harness events={[allDayEvent({ id: "e1", summary: "Conference", start: "2026-10-20", end: "2026-10-25" })]} />);
-  fireDrop(within(cellForDay(22)).getByText("Conference"), cellForDay(22));
+  fireDragTo(within(cellForDay(22)).getByText("Conference"), "2026-10-22");
   expect(mockUpdateEventAction).not.toHaveBeenCalled();
 });
 
 test("dragging a task's checkbox does not start a drag", () => {
   render(<Harness tasks={[calendarTask({ id: "t1" })]} />);
   const checkbox = screen.getByRole("checkbox");
-  expect(checkbox.closest("[draggable='true']")).toBeNull();
+  fireDragTo(checkbox, "2026-10-25");
+  expect(mockUpdateTaskAction).not.toHaveBeenCalled();
 });
 
 test("a failed drop shows an inline error and leaves the event where it was", async () => {
   mockUpdateEventAction.mockRejectedValueOnce(new Error("boom"));
   render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
-  fireDrop(screen.getByText("Standup"), cellForDay(25));
+  fireDragTo(screen.getByText("Standup"), "2026-10-25");
   await vi.waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t reschedule/i));
   expect(screen.getByText("Standup")).toBeInTheDocument(); // still rendered from unchanged props
 });

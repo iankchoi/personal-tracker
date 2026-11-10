@@ -23,6 +23,15 @@ export function usePointerDrag(options: {
   const isDraggingRef = useRef(false);
 
   function onPointerDown(event: ReactPointerEvent) {
+    // Only the primary mouse/touch/pen button starts a gesture: a right- or
+    // middle-click (or a second simultaneous pointer) must fall through to
+    // the browser's own handling (e.g. a context menu) instead of starting a
+    // drag or counting as the click that opens the editor — the old native
+    // `onClick` only ever fired for the primary button, so skipping this
+    // check would be a regression from it.
+    if (event.button !== 0 || !event.isPrimary) {
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     startRef.current = { x: event.clientX, y: event.clientY };
     isDraggingRef.current = false;
@@ -47,6 +56,13 @@ export function usePointerDrag(options: {
   }
 
   function onPointerUp(event: ReactPointerEvent) {
+    // A non-primary button released mid-gesture (e.g. a middle-click while
+    // the primary button is still down) must not finalize or reset the
+    // gesture — only the primary button's eventual pointerup (or a
+    // pointercancel) resolves it.
+    if (event.button !== 0) {
+      return;
+    }
     if (!startRef.current) {
       return;
     }

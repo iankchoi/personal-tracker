@@ -79,19 +79,28 @@ function MonthEventChip({
   onDrop(clientX: number, clientY: number): void;
   onCancel(): void;
 }) {
-  const drag = usePointerDrag({ onClick: onOpenEdit, onMove, onDrop });
+  // Named, not `{...drag}` below: spreading the full usePointerDrag return
+  // would leak its `isDragging` field onto this DOM `<span>` as a stray
+  // attribute (same fix as MonthTaskEntry below and HourGrid's chip/block
+  // components).
+  const { onPointerDown, onPointerMove, onPointerUp, onPointerCancel } = usePointerDrag({
+    onClick: onOpenEdit,
+    onMove,
+    onDrop,
+  });
 
   return (
     <span
       className={`mg-chip ${colorToken}`}
-      {...drag}
       onPointerDown={(pointerEvent) => {
         onGrab();
-        drag.onPointerDown(pointerEvent);
+        onPointerDown(pointerEvent);
       }}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       onPointerCancel={() => {
         onCancel();
-        drag.onPointerCancel();
+        onPointerCancel();
       }}
     >
       {event.start.dateTime && <span className="mg-chip-time">{formatTimeLabel(event.start.dateTime)}</span>}
@@ -194,7 +203,7 @@ export function MonthView({
   const { openCreate, openDayDetail, openEditEvent, openEditTask } = useCalendarInteraction();
   const router = useRouter();
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null);
-  const [dragOverDay, setDragOverDay] = useState<number | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
 
   async function handleDrop(day: Date) {
@@ -238,7 +247,8 @@ export function MonthView({
   // Mirrors the old `onDragEnter`'s day-cell highlight, driven by hit-testing
   // instead of a native dragenter target.
   function handlePointerMove(clientX: number, clientY: number) {
-    setDragOverDay(dayFromPoint(clientX, clientY)?.getTime() ?? null);
+    const day = dayFromPoint(clientX, clientY);
+    setDragOverDay(day ? formatDateParam(day) : null);
   }
 
   function handlePointerDrop(clientX: number, clientY: number) {
@@ -289,7 +299,7 @@ export function MonthView({
               const classes = ["mg-cell"];
               if (!isSameLocalMonth(day, referenceDate)) classes.push("outside");
               if (isSameLocalDay(day, today)) classes.push("today");
-              if (dragOverDay === day.getTime()) classes.push("drag-over");
+              if (dragOverDay === formatDateParam(day)) classes.push("drag-over");
 
               return (
                 <div

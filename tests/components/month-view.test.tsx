@@ -94,7 +94,7 @@ function fireDragTo(source: HTMLElement, hitDataDay: string) {
   target.dataset.day = hitDataDay;
   const originalElementFromPoint = document.elementFromPoint;
   document.elementFromPoint = () => target;
-  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1 });
+  fireEvent.pointerDown(source, { clientX: 0, clientY: 0, pointerId: 1, isPrimary: true });
   fireEvent.pointerMove(source, { clientX: 20, clientY: 20, pointerId: 1 }); // past the 4px threshold
   fireEvent.pointerUp(source, { clientX: 20, clientY: 20, pointerId: 1 });
   document.elementFromPoint = originalElementFromPoint;
@@ -138,7 +138,7 @@ test("dragging an event chip onto a different day cell calls updateEventAction w
 test("clicking an event chip without moving the pointer opens its editor, not a reschedule", () => {
   render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
   const chip = screen.getByText("Standup");
-  fireEvent.pointerDown(chip, { clientX: 10, clientY: 10, pointerId: 1 });
+  fireEvent.pointerDown(chip, { clientX: 10, clientY: 10, pointerId: 1, isPrimary: true });
   fireEvent.pointerUp(chip, { clientX: 10, clientY: 10, pointerId: 1 });
   expect(mockUpdateEventAction).not.toHaveBeenCalled();
   expect(screen.getByLabelText(/description/i)).toBeInTheDocument(); // the event editor opened
@@ -210,7 +210,7 @@ test("dragging a task's title onto a different day cell calls updateTaskAction a
 test("clicking a task's title without moving the pointer opens its editor, not a reschedule", () => {
   render(<Harness tasks={[calendarTask({ id: "t1" })]} />);
   const title = screen.getByText("Errand");
-  fireEvent.pointerDown(title, { clientX: 10, clientY: 10, pointerId: 1 });
+  fireEvent.pointerDown(title, { clientX: 10, clientY: 10, pointerId: 1, isPrimary: true });
   fireEvent.pointerUp(title, { clientX: 10, clientY: 10, pointerId: 1 });
   expect(mockUpdateTaskAction).not.toHaveBeenCalled();
   expect(screen.getByRole("dialog", { name: /edit task/i })).toBeInTheDocument();
@@ -222,4 +222,12 @@ test("a failed drop shows an inline error and leaves the event where it was", as
   fireDragTo(screen.getByText("Standup"), "2026-10-25");
   await vi.waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t reschedule/i));
   expect(screen.getByText("Standup")).toBeInTheDocument(); // still rendered from unchanged props
+});
+
+test("rendering an event month chip never leaks usePointerDrag's isDragging onto the DOM", () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
+  const leaked = consoleError.mock.calls.some((call) => call.some((arg) => String(arg).includes("isDragging")));
+  expect(leaked).toBe(false);
+  consoleError.mockRestore();
 });

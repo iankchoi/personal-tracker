@@ -287,7 +287,22 @@ export function HourGrid({
           </button>
         </div>
       )}
-      <div className={gridClassName}>
+      <div
+        className={gridClassName}
+        onDragLeave={(event) => {
+          // Only clear when the pointer has actually left the whole grid —
+          // checked via relatedTarget containment, not this event firing at
+          // all, since dragleave also fires on every internal child boundary
+          // crossed (see the dragover comments below). Without this check,
+          // dragging out through the hour-label gutter or past the last
+          // column would otherwise leave the previous column's indicator
+          // stuck on screen with nothing left to clear it.
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDragOverKey(null);
+            setDragPreviewHour(null);
+          }
+        }}
+      >
       <div className="wg-corner" />
 
       {days.map((day, index) => (
@@ -309,11 +324,16 @@ export function HourGrid({
             className={dragOverKey === alldayKey ? "wg-allday drag-over" : "wg-allday"}
             data-testid="wg-allday"
             style={{ gridColumn: index + 2 }}
-            onDragEnter={() => setDragOverKey(alldayKey)}
-            onDragLeave={() => setDragOverKey((current) => (current === alldayKey ? null : current))}
             onDragOver={(event) => {
               event.preventDefault();
               event.dataTransfer.dropEffect = "move";
+              // Set here, not on dragenter/dragleave: those fire on every child
+              // boundary the pointer crosses (any event chip or task inside this
+              // row counts as a "child"), not just on truly entering/leaving the
+              // row, so deriving this from the steadily-bubbling dragover instead
+              // is what keeps the highlight from flickering as the pointer moves
+              // across the row's contents.
+              setDragOverKey(alldayKey);
             }}
             onDrop={(event) => {
               event.preventDefault();
@@ -384,14 +404,18 @@ export function HourGrid({
             className={dragOverKey === colKey ? "wg-col drag-over" : "wg-col"}
             data-testid="wg-col"
             style={{ gridColumn: index + 2 }}
-            onDragEnter={() => setDragOverKey(colKey)}
-            onDragLeave={() => {
-              setDragOverKey((current) => (current === colKey ? null : current));
-              setDragPreviewHour(null);
-            }}
             onDragOver={(event) => {
               event.preventDefault();
               event.dataTransfer.dropEffect = "move";
+              // Both set here, not on dragenter/dragleave: this column has 15
+              // stacked `.wg-line` rows plus event/task blocks as children, and
+              // dragenter/dragleave fire on every one of those child boundaries
+              // the pointer crosses — not just on truly entering/leaving the
+              // column — so tracking "entered" that way made the indicator (and
+              // the highlight) flicker constantly while dragging through the
+              // column's own contents. dragover bubbles up through children
+              // reliably instead, so it's the only source of truth here.
+              setDragOverKey(colKey);
               const offsetY = event.clientY - event.currentTarget.getBoundingClientRect().top;
               setDragPreviewHour(hourFromDropOffset(offsetY));
             }}

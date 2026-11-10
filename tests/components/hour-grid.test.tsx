@@ -289,14 +289,33 @@ test("dragging over the timed grid shows a drop indicator snapped to the nearest
   expect(indicator.style.top).toBe(`${7.25 * HOUR_ROW_HEIGHT}px`);
 });
 
-test("leaving the timed grid clears the drop indicator", () => {
+test("leaving the whole grid (relatedTarget outside it) clears the drop indicator", () => {
   render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
   const column = dayColumn();
   dragOverAt(screen.getByText("Standup"), column, { offsetY: 7 * HOUR_ROW_HEIGHT });
   expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
 
+  // No relatedTarget set — reads as "left to nowhere this grid can see", same as leaving the page entirely.
   fireEvent(column, new Event("dragleave", { bubbles: true, cancelable: true }));
   expect(column.querySelector(".wg-drop-indicator")).toBeNull();
+});
+
+test("the drop indicator survives the pointer crossing onto a child element within the column (no flicker)", () => {
+  // Regression test for the real HTML5 DnD gotcha this feature hit: dragenter/dragleave
+  // fire on every child boundary the pointer crosses, not just on truly entering/leaving
+  // the column — tracking "is this column active" that way made the indicator flicker
+  // constantly while dragging through the column's own `.wg-line` rows and event blocks.
+  render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
+  const column = dayColumn();
+  dragOverAt(screen.getByText("Standup"), column, { offsetY: 7 * HOUR_ROW_HEIGHT });
+  expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
+
+  const childLine = column.querySelector(".wg-line") as HTMLElement;
+  const leaveOntoChild = new Event("dragleave", { bubbles: true, cancelable: true });
+  Object.assign(leaveOntoChild, { relatedTarget: childLine });
+  fireEvent(column, leaveOntoChild);
+
+  expect(column.querySelector(".wg-drop-indicator")).not.toBeNull();
 });
 
 test("dragging a timed task to a new time sets a quarter-hour dueTime", async () => {

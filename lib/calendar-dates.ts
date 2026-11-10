@@ -190,6 +190,12 @@ export function formatDateParam(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** The inverse of `formatDateParam` — parses a `YYYY-MM-DD` string into a plain calendar date. */
+export function parseDateParam(dateParam: string): Date {
+  const [year, month, day] = dateParam.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 /**
  * Google Calendar's all-day events carry an **exclusive** `end.date`: a
  * single-day event on Oct 25 is reported as `{ start: { date: "2026-10-25" },

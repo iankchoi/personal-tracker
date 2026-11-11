@@ -729,3 +729,55 @@ test("updateEventAction with scope 'following' sets a timeZone on the new series
   expect(createdPayload.start.timeZone).toBe("America/New_York");
   expect(createdPayload.end.timeZone).toBe("America/New_York");
 });
+
+// --- Follow-up fix round: Fix 1 — patchWholeSeries must carry timeZone through shiftMasterTimes ---
+
+test("updateEventAction with scope 'all' sets start.timeZone/end.timeZone on the shifted master PATCH", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({
+      start: "2026-11-25T10:00:00-05:00",
+      end: "2026-11-25T10:30:00-05:00",
+      timeZone: "America/New_York",
+    }),
+    eventId: "occ3", scope: "all", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  const payload = mockUpdateEvent.mock.calls[0][3];
+  expect(typeof payload.start.timeZone).toBe("string");
+  expect(payload.start.timeZone.length).toBeGreaterThan(0);
+  expect(typeof payload.end.timeZone).toBe("string");
+  expect(payload.end.timeZone.length).toBeGreaterThan(0);
+});
+
+test("updateEventAction with scope 'following' on the series' first occurrence (collapsing onto 'all') sets start.timeZone/end.timeZone", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({
+      start: "2026-11-11T10:00:00-05:00",
+      end: "2026-11-11T10:30:00-05:00",
+      timeZone: "America/New_York",
+    }),
+    eventId: "occ1", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-11T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-11T09:30:00-05:00",
+  });
+
+  const payload = mockUpdateEvent.mock.calls[0][3];
+  expect(typeof payload.start.timeZone).toBe("string");
+  expect(payload.start.timeZone.length).toBeGreaterThan(0);
+  expect(typeof payload.end.timeZone).toBe("string");
+  expect(payload.end.timeZone.length).toBeGreaterThan(0);
+});

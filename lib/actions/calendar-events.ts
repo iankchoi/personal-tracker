@@ -211,25 +211,46 @@ function requireOccurrenceOriginalEnd(input: { occurrenceOriginalEnd?: string },
  * whole-day delta via `dayDelta`/`shiftDateString` (the same helpers Month
  * view's day-chip drag uses), since a `date`-only field has no time-of-day to
  * do instant math against.
+ *
+ * This function only ever patches the *master* of a recurring series (it's
+ * only called from `patchWholeSeries`), and a master — by definition — always
+ * carries a `recurrence`. Google therefore always requires `start.timeZone`/
+ * `end.timeZone` on this PATCH (see `EventActionInput.timeZone`'s own doc),
+ * so `timeZone: input.timeZone` is included unconditionally here rather than
+ * being gated the way `buildEventPayload` gates it for the general
+ * create/update path.
  */
 function shiftMasterTimes(
   master: GoogleCalendarEvent,
-  input: { allDay: boolean; start: string; end: string; occurrenceOriginalStart: string; occurrenceOriginalEnd: string },
+  input: {
+    allDay: boolean;
+    start: string;
+    end: string;
+    occurrenceOriginalStart: string;
+    occurrenceOriginalEnd: string;
+    timeZone?: string;
+  },
 ): { start: GoogleCalendarEventWrite["start"]; end: GoogleCalendarEventWrite["end"] } {
   if (input.allDay) {
     const startDelta = dayDelta(parseDateOnly(input.occurrenceOriginalStart), parseDateOnly(input.start));
     const endDelta = dayDelta(parseDateOnly(input.occurrenceOriginalEnd), parseDateOnly(input.end));
     return {
-      start: { date: shiftDateString(master.start.date as string, startDelta) },
-      end: { date: shiftDateString(master.end.date as string, endDelta) },
+      start: { date: shiftDateString(master.start.date as string, startDelta), timeZone: input.timeZone },
+      end: { date: shiftDateString(master.end.date as string, endDelta), timeZone: input.timeZone },
     };
   }
 
   const startDelta = new Date(input.start).getTime() - new Date(input.occurrenceOriginalStart).getTime();
   const endDelta = new Date(input.end).getTime() - new Date(input.occurrenceOriginalEnd).getTime();
   return {
-    start: { dateTime: new Date(new Date(master.start.dateTime as string).getTime() + startDelta).toISOString() },
-    end: { dateTime: new Date(new Date(master.end.dateTime as string).getTime() + endDelta).toISOString() },
+    start: {
+      dateTime: new Date(new Date(master.start.dateTime as string).getTime() + startDelta).toISOString(),
+      timeZone: input.timeZone,
+    },
+    end: {
+      dateTime: new Date(new Date(master.end.dateTime as string).getTime() + endDelta).toISOString(),
+      timeZone: input.timeZone,
+    },
   };
 }
 

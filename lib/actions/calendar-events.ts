@@ -3,8 +3,8 @@
 import { auth } from "../../auth";
 import type { CalendarColorToken } from "../calendar-colors";
 import { dayDelta, shiftDateString } from "../calendar-drag";
-import { isFirstOccurrence, truncateRRuleBefore } from "../calendar-recurrence";
-import { colorIdForToken } from "../calendar-event-colors";
+import { buildRRule, isFirstOccurrence, parseRRule, truncateRRuleBefore } from "../calendar-recurrence";
+import { colorIdForToken, tokenForColorId } from "../calendar-event-colors";
 import {
   createEvent,
   deleteEvent,
@@ -168,10 +168,28 @@ function resolveMasterId(input: { eventId: string; recurringEventId?: string }):
   return input.recurringEventId ?? input.eventId;
 }
 
+/** Throws a clear error instead of letting a missing `occurrenceOriginalStart` silently produce a `NaN`-laced write. */
+function requireOccurrenceOriginalStart(input: { occurrenceOriginalStart?: string }, scope: RecurrenceEditScope): string {
+  if (!input.occurrenceOriginalStart) {
+    throw new Error(`occurrenceOriginalStart is required for scope "${scope}"`);
+  }
+  return input.occurrenceOriginalStart;
+}
+
+/** Throws a clear error instead of letting a missing `occurrenceOriginalEnd` silently produce a `NaN`-laced write. */
+function requireOccurrenceOriginalEnd(input: { occurrenceOriginalEnd?: string }, scope: RecurrenceEditScope): string {
+  if (!input.occurrenceOriginalEnd) {
+    throw new Error(`occurrenceOriginalEnd is required for scope "${scope}"`);
+  }
+  return input.occurrenceOriginalEnd;
+}
+
 /**
- * Computes the master's shifted `start`/`end` for a "whole series" edit: the
- * same delta between the occurrence's original and new start, re-applied to
- * the master's own original start/end so every occurrence moves together.
+ * Computes the master's shifted `start`/`end` for a "whole series" edit.
+ * `start` and `end` each shift by their *own* independent delta (occurrence's
+ * original start -> new start, and separately original end -> new end), not
+ * a single delta applied to both — a pure resize (only the end moves) must
+ * still shift the master's end, even though its start delta is zero.
  *
  * Timed events shift by an absolute-instant millisecond delta (so the
  * master's own UTC offset is honored correctly); all-day events shift by a
@@ -181,37 +199,111 @@ function resolveMasterId(input: { eventId: string; recurringEventId?: string }):
  */
 function shiftMasterTimes(
   master: GoogleCalendarEvent,
-  input: { allDay: boolean; start: string; occurrenceOriginalStart: string },
+  input: { allDay: boolean; start: string; end: string; occurrenceOriginalStart: string; occurrenceOriginalEnd: string },
 ): { start: GoogleCalendarEventWrite["start"]; end: GoogleCalendarEventWrite["end"] } {
   if (input.allDay) {
-    const delta = dayDelta(parseDateOnly(input.occurrenceOriginalStart), parseDateOnly(input.start));
+    const startDelta = dayDelta(parseDateOnly(input.occurrenceOriginalStart), parseDateOnly(input.start));
+    const endDelta = dayDelta(parseDateOnly(input.occurrenceOriginalEnd), parseDateOnly(input.end));
     return {
-      start: { date: shiftDateString(master.start.date as string, delta) },
-      end: { date: shiftDateString(master.end.date as string, delta) },
+      start: { date: shiftDateString(master.start.date as string, startDelta) },
+      end: { date: shiftDateString(master.end.date as string, endDelta) },
     };
   }
 
-  const delta = new Date(input.start).getTime() - new Date(input.occurrenceOriginalStart).getTime();
+  const startDelta = new Date(input.start).getTime() - new Date(input.occurrenceOriginalStart).getTime();
+  const endDelta = new Date(input.end).getTime() - new Date(input.occurrenceOriginalEnd).getTime();
   return {
-    start: { dateTime: new Date(new Date(master.start.dateTime as string).getTime() + delta).toISOString() },
-    end: { dateTime: new Date(new Date(master.end.dateTime as string).getTime() + delta).toISOString() },
+    start: { dateTime: new Date(new Date(master.start.dateTime as string).getTime() + startDelta).toISOString() },
+    end: { dateTime: new Date(new Date(master.end.dateTime as string).getTime() + endDelta).toISOString() },
   };
 }
 
-/** PATCHes the master with the given input's other fields plus its shifted start/end — the "all" scope's whole-series edit, also used by "following" when it collapses onto the series' first occurrence. */
+/** Applies `transform` to the one entry of a Google `recurrence` array that is the RRULE line, leaving every other line (EXDATE, RDATE, EXRULE, ...) unchanged and in its original position. */
+function mapRRuleLine(recurrence: string[], transform: (rruleLine: string) => string): string[] {
+  return recurrence.map((line) => (line.startsWith("RRULE:") ? transform(line) : line));
+}
+
+/**
+ * When a whole-series edit (`"all"`, or `"following"` collapsing onto it)
+ * shifts the master onto a different day of the week, a `WEEKLY` rule's
+ * `BYDAY` has to follow — otherwise Google keeps generating occurrences on
+ * the old weekday forever. Returns the master's `recurrence` with its RRULE
+ * line's `BYDAY` corrected via a `parseRRule`/`buildRRule` round-trip against
+ * the new start day, or `undefined` when there's nothing to correct (the
+ * caller explicitly supplied its own `recurrence`, the master has none, or
+ * the weekday didn't actually change) — `undefined` here means "don't
+ * override `buildEventPayload`'s own `recurrence` handling", not "clear it".
+ */
+function wholeSeriesRecurrenceOverride(
+  master: GoogleCalendarEvent,
+  input: { allDay: boolean; recurrence?: string[] },
+  shiftedStart: GoogleCalendarEventWrite["start"],
+): string[] | undefined {
+  if (input.recurrence !== undefined || !master.recurrence) {
+    return undefined;
+  }
+
+  const oldStartDay = input.allDay
+    ? parseDateOnly(master.start.date as string)
+    : new Date(master.start.dateTime as string);
+  const newStartDay = input.allDay
+    ? parseDateOnly(shiftedStart?.date as string)
+    : new Date(shiftedStart?.dateTime as string);
+
+  if (oldStartDay.getDay() === newStartDay.getDay()) {
+    return undefined;
+  }
+
+  return mapRRuleLine(master.recurrence, (line) => {
+    const rule = parseRRule(line);
+    return rule.freq === "WEEKLY" ? buildRRule(rule, newStartDay) : line;
+  });
+}
+
+/** PATCHes the master with the given input's other fields plus its shifted start/end (and corrected `BYDAY`, if the weekday moved) — the "all" scope's whole-series edit, also used by "following" when it collapses onto the series' first occurrence. */
 async function patchWholeSeries(
   accessToken: string,
-  input: EventActionInput & { calendarId: string; occurrenceOriginalStart: string },
+  input: EventActionInput & { calendarId: string; occurrenceOriginalStart: string; occurrenceOriginalEnd: string },
   masterId: string,
   master: GoogleCalendarEvent,
 ): Promise<{ id: string }> {
   const shifted = shiftMasterTimes(master, input);
+  const recurrenceOverride = wholeSeriesRecurrenceOverride(master, input, shifted.start);
   const updated = await updateEvent(accessToken, input.calendarId, masterId, {
     ...buildEventPayload(input, { forUpdate: true }),
     start: shifted.start,
     end: shifted.end,
+    ...(recurrenceOverride !== undefined ? { recurrence: recurrenceOverride } : {}),
   });
   return { id: updated.id };
+}
+
+/**
+ * Backfills the four fields `EventEditor`/drag call sites document as
+ * destructive to resend untouched (see `withoutEventClobberFields` in
+ * `lib/calendar-drag.ts`): `colorToken`/`notifyMinutesBefore`/`addGoogleMeet`/
+ * `guestEmails` left `undefined` on `input` mean "don't touch this" on a
+ * PATCH, but mean "this event doesn't have one" on a CREATE. The "following"
+ * split's new series is a CREATE, so any of those four left `undefined` is
+ * read from the master's own *current* value instead, so a dragged recurring
+ * event doesn't drop its color, reminder, Meet link, or guests the moment it
+ * splits onto a new series.
+ */
+function backfillFromMasterForCreate(input: EventActionInput, master: GoogleCalendarEvent): EventActionInput {
+  return {
+    ...input,
+    colorToken: input.colorToken === undefined ? tokenForColorId(master.colorId) : input.colorToken,
+    notifyMinutesBefore:
+      input.notifyMinutesBefore === undefined
+        ? master.reminders?.overrides?.[0]?.minutes ?? null
+        : input.notifyMinutesBefore,
+    addGoogleMeet:
+      input.addGoogleMeet === undefined
+        ? Boolean(master.conferenceData?.entryPoints?.length)
+        : input.addGoogleMeet,
+    guestEmails:
+      input.guestEmails === undefined ? master.attendees?.map((attendee) => attendee.email) ?? [] : input.guestEmails,
+  };
 }
 
 /**
@@ -219,14 +311,21 @@ async function patchWholeSeries(
  * - `"this"` (or no scope at all) patches exactly `input.eventId`, as before.
  * - `"all"` resolves the series' master (`recurringEventId` if given,
  *   otherwise `eventId` itself is already the master) and PATCHes *it*,
- *   shifting its start/end by the same delta the caller applied to this
- *   occurrence — every occurrence in the series moves together.
+ *   shifting its start/end by `start`'s and `end`'s own independent deltas
+ *   (so a pure resize moves only the end) — every occurrence in the series
+ *   moves together. If the shift lands the master on a different weekday, a
+ *   `WEEKLY` rule's `BYDAY` is corrected to match (`wholeSeriesRecurrenceOverride`).
  * - `"following"` resolves the master the same way. If this occurrence is the
  *   series' very first (`isFirstOccurrence`), there's nothing "before" it to
  *   keep on the old pattern, so it collapses onto exactly the `"all"` logic
- *   above. Otherwise it splits the series: the master's `recurrence` is
- *   truncated to end the day before this occurrence, and a brand new series
- *   is created starting from this occurrence's new start/end. The new
+ *   above. Otherwise it splits the series: a brand new series is *created*
+ *   first, starting from this occurrence's new start/end, and only once that
+ *   succeeds is the old master's `recurrence` truncated to end the day before
+ *   this occurrence (preserving every non-RRULE line — `EXDATE`, `RDATE`,
+ *   `EXRULE` — untouched via `mapRRuleLine`). Create-then-truncate, not the
+ *   other way around, so a failure between the two steps leaves a harmless
+ *   duplicate (the old series still running through its original end) rather
+ *   than a permanently truncated series with nothing to replace it. The new
  *   series' `recurrence` depends on whether `input.recurrence` was touched:
  *   left `undefined` (Repeat untouched) continues the master's own original,
  *   untruncated rule; a non-empty array (a new rule was picked) is used as
@@ -234,7 +333,11 @@ async function patchWholeSeries(
  *   `recurrence` field at all — a plain one-off, not an empty array. Building
  *   the new series via `buildEventPayload(input)` (not copying
  *   `master.conferenceData`) is what gives it a fresh Meet link rather than
- *   the old series' resolved one, whenever `addGoogleMeet` is set.
+ *   the old series' resolved one, whenever `addGoogleMeet` is set — and
+ *   `backfillFromMasterForCreate` fills in color/reminder/Meet/guests from the
+ *   master's current values for any of those four left `undefined` on
+ *   `input` (the drag call sites' "don't touch this" convention, which would
+ *   otherwise read as "this event doesn't have one" on this CREATE).
  *
  * Unlike `createEventAction`, every PATCH here builds its payload with
  * `forUpdate: true` so an explicit `colorToken: null` /
@@ -248,22 +351,22 @@ export async function updateEventAction(
   const accessToken = await requireGoogleAccessToken();
 
   if (input.scope === "all") {
+    const occurrenceOriginalStart = requireOccurrenceOriginalStart(input, "all");
+    const occurrenceOriginalEnd = requireOccurrenceOriginalEnd(input, "all");
     const masterId = resolveMasterId(input);
     const master = await getEvent(accessToken, input.calendarId, masterId);
-    return patchWholeSeries(accessToken, { ...input, occurrenceOriginalStart: input.occurrenceOriginalStart as string }, masterId, master);
+    return patchWholeSeries(accessToken, { ...input, occurrenceOriginalStart, occurrenceOriginalEnd }, masterId, master);
   }
 
   if (input.scope === "following") {
+    const occurrenceOriginalStart = requireOccurrenceOriginalStart(input, "following");
+    const occurrenceOriginalEnd = requireOccurrenceOriginalEnd(input, "following");
     const masterId = resolveMasterId(input);
     const master = await getEvent(accessToken, input.calendarId, masterId);
 
-    if (isFirstOccurrence(master.start.dateTime ?? (master.start.date as string), input.occurrenceOriginalStart as string)) {
-      return patchWholeSeries(accessToken, { ...input, occurrenceOriginalStart: input.occurrenceOriginalStart as string }, masterId, master);
+    if (isFirstOccurrence(master.start.dateTime ?? (master.start.date as string), occurrenceOriginalStart)) {
+      return patchWholeSeries(accessToken, { ...input, occurrenceOriginalStart, occurrenceOriginalEnd }, masterId, master);
     }
-
-    await updateEvent(accessToken, input.calendarId, masterId, {
-      recurrence: [truncateRRuleBefore(master.recurrence![0], new Date(input.occurrenceOriginalStart as string))],
-    });
 
     const newSeriesRecurrence =
       input.recurrence === undefined
@@ -272,11 +375,21 @@ export async function updateEventAction(
           ? input.recurrence
           : undefined;
 
+    // Create the new series first: if a failure happens after this, the old
+    // series is still intact (a harmless duplicate running through its
+    // original end) rather than permanently truncated with nothing to
+    // replace it.
     const created = await createEvent(
       accessToken,
       input.calendarId,
-      buildEventPayload({ ...input, recurrence: newSeriesRecurrence }),
+      buildEventPayload(backfillFromMasterForCreate({ ...input, recurrence: newSeriesRecurrence }, master)),
     );
+
+    await updateEvent(accessToken, input.calendarId, masterId, {
+      recurrence: mapRRuleLine(master.recurrence ?? [], (line) =>
+        truncateRRuleBefore(line, new Date(occurrenceOriginalStart)),
+      ),
+    });
 
     return { id: created.id };
   }
@@ -315,16 +428,19 @@ export async function deleteEventAction(
   }
 
   if (input.scope === "following") {
+    const occurrenceOriginalStart = requireOccurrenceOriginalStart(input, "following");
     const masterId = resolveMasterId(input);
     const master = await getEvent(accessToken, input.calendarId, masterId);
 
-    if (isFirstOccurrence(master.start.dateTime ?? (master.start.date as string), input.occurrenceOriginalStart as string)) {
+    if (isFirstOccurrence(master.start.dateTime ?? (master.start.date as string), occurrenceOriginalStart)) {
       await deleteEvent(accessToken, input.calendarId, masterId);
       return;
     }
 
     await updateEvent(accessToken, input.calendarId, masterId, {
-      recurrence: [truncateRRuleBefore(master.recurrence![0], new Date(input.occurrenceOriginalStart as string))],
+      recurrence: mapRRuleLine(master.recurrence ?? [], (line) =>
+        truncateRRuleBefore(line, new Date(occurrenceOriginalStart)),
+      ),
     });
     return;
   }

@@ -445,3 +445,135 @@ test("updateEventAction with scope 'following' and recurrence explicitly cleared
   const createdPayload = mockCreateEvent.mock.calls[0][2];
   expect(createdPayload.recurrence).toBeUndefined();
 });
+
+// --- Review fix round: Critical 1 — independent start/end deltas on scope "all" ---
+
+test("updateEventAction with scope 'all' shifts the master's end independently when only the end moves (a pure resize)", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  // start unchanged (delta 0), end moved by +30 minutes.
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-25T09:00:00-05:00", end: "2026-11-25T10:00:00-05:00" }),
+    eventId: "occ3", scope: "all", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({
+      start: { dateTime: "2026-11-11T14:00:00.000Z" }, // unchanged
+      end: { dateTime: "2026-11-11T15:00:00.000Z" }, // +30 minutes
+    }),
+  );
+});
+
+// --- Review fix round: Critical 2 — backfill color/reminders/Meet/guests on the "following" split's new series ---
+
+test("updateEventAction with scope 'following' backfills color/reminders/Meet/guests from the master when the (drag-shaped) input leaves them undefined", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary", summary: "Standup",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+    colorId: colorIdForToken("wk"),
+    reminders: { useDefault: false, overrides: [{ method: "popup", minutes: 15 }] },
+    conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.com/old-link" }] },
+    attendees: [{ email: "a@example.com" }, { email: "b@example.com" }],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  // baseInput() already leaves colorToken/notifyMinutesBefore/addGoogleMeet/guestEmails
+  // undefined — the same shape `withoutEventClobberFields` sends from a real drag.
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-25T10:00:00-05:00", end: "2026-11-25T10:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  const createdPayload = mockCreateEvent.mock.calls[0][2];
+  expect(createdPayload.colorId).toBe(colorIdForToken("wk"));
+  expect(createdPayload.reminders).toEqual({ useDefault: false, overrides: [{ method: "popup", minutes: 15 }] });
+  expect(createdPayload.conferenceData).toEqual({ createRequest: { requestId: expect.any(String) } });
+  expect(createdPayload.attendees).toEqual([{ email: "a@example.com" }, { email: "b@example.com" }]);
+});
+
+// --- Review fix round: Important 3 — presence guard for occurrenceOriginalStart ---
+
+test("updateEventAction with scope 'all' and no occurrenceOriginalStart throws clearly instead of computing a NaN-laced shift", async () => {
+  await expect(
+    updateEventAction({ ...baseInput(), eventId: "occ3", scope: "all", recurringEventId: "master1" }),
+  ).rejects.toThrow(/occurrenceOriginalStart/);
+
+  expect(mockGetEvent).not.toHaveBeenCalled();
+  expect(mockUpdateEvent).not.toHaveBeenCalled();
+});
+
+// --- Review fix round: Important 4 — truncate preserves non-RRULE recurrence lines ---
+
+test("deleteEventAction with scope 'following' preserves a non-RRULE line (e.g. EXDATE) when truncating the RRULE line", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary", start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["EXDATE:20261118T140000Z", "RRULE:FREQ=WEEKLY"],
+  });
+
+  await deleteEventAction({
+    calendarId: "primary", eventId: "occ3", scope: "following",
+    recurringEventId: "master1", occurrenceOriginalStart: "2026-11-25T09:00:00-05:00",
+  });
+
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({
+      recurrence: ["EXDATE:20261118T140000Z", truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date(2026, 10, 25))],
+    }),
+  );
+});
+
+// --- Review fix round: Important 5 — BYDAY follows a weekday-changing shift ---
+
+test("updateEventAction with scope 'all' updates the RRULE's BYDAY when the shift moves the master onto a different weekday", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    // 2026-11-11 is a Wednesday.
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=WE"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  // Shifted from Wednesday 2026-11-25 to Thursday 2026-11-26 — a day later.
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-26T09:00:00-05:00", end: "2026-11-26T09:30:00-05:00" }),
+    eventId: "occ3", scope: "all", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({ recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=TH"] }),
+  );
+});
+
+// --- Review fix round: Important 7 — create the new series before truncating the old one ---
+
+test("updateEventAction with scope 'following' creates the new series before truncating the old one", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-25T10:00:00-05:00", end: "2026-11-25T10:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockCreateEvent.mock.invocationCallOrder[0]).toBeLessThan(mockUpdateEvent.mock.invocationCallOrder[0]);
+});

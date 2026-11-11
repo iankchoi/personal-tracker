@@ -111,8 +111,11 @@ export function truncateRRuleBefore(line: string, occurrenceStart: Date): string
 
 /**
  * Checks if an occurrence is the first occurrence by comparing the master's start
- * with the occurrence's start. Handles both timed and date-only formats.
+ * with the occurrence's start. Compares parsed instants rather than the raw
+ * strings, so equivalent timestamps written with different (but equally valid)
+ * textual forms — e.g. a different UTC offset notation — still compare equal.
+ * Handles both timed and date-only formats, since `Date` parses both.
  */
 export function isFirstOccurrence(masterStart: string, occurrenceStart: string): boolean {
-  return masterStart === occurrenceStart;
+  return new Date(masterStart).getTime() === new Date(occurrenceStart).getTime();
 }

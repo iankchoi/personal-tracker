@@ -615,6 +615,23 @@ test("picking a scope after Save on an all-day recurring event sends occurrenceO
   );
 });
 
+test("pressing Backspace while the Save scope dialog is already open does not also pop the Delete scope dialog", async () => {
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "occ1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false, recurringEventId: "master1" }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  await userEvent.click(screen.getByText("Save"));
+  expect(await screen.findByRole("button", { name: /all events/i })).toBeInTheDocument();
+
+  // `RecurrenceScopeDialog`'s `ModalShell` parks focus on a non-input <div>,
+  // which `isTypingTarget` doesn't treat as a typing target — so without a
+  // guard for "a scope dialog is already open", this Backspace would also
+  // trigger handleDelete() and pop a second, overlapping scope dialog.
+  await userEvent.keyboard("{Backspace}");
+
+  expect(screen.getAllByRole("button", { name: /all events/i })).toHaveLength(1);
+  expect(mockDeleteEventAction).not.toHaveBeenCalled();
+});
+
 test("clicking Delete on a recurring event shows the scope dialog before calling deleteEventAction", async () => {
   render(
     <EventEditor mode="edit" initial={{ eventId: "occ1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false, recurringEventId: "master1" }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,

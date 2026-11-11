@@ -430,6 +430,19 @@ export function EventEditor(props: {
   // the event.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      // A `RecurrenceScopeDialog` parks focus on its `ModalShell` card — a
+      // non-input `<div tabIndex={-1}>` that `isTypingTarget` doesn't treat
+      // as a typing target. Without this guard, pressing Backspace/Delete
+      // while the Save dialog is already up (deciding a scope for the edit
+      // in flight) also triggers `handleDelete()`, setting `pendingDelete`
+      // and popping a *second* scope dialog on top of the first. Shortcuts
+      // firing at all while a modal is open is the actual problem — same
+      // reasoning `CalendarShortcuts.tsx` already applies via its own
+      // `popupIsOpen` check — so this is checked first, before even looking
+      // at the key or the focused element.
+      if (pendingSaveInput || pendingDelete) {
+        return;
+      }
       if (event.key !== "Delete" && event.key !== "Backspace") {
         return;
       }

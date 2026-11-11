@@ -17,7 +17,7 @@ function extractOffset(isoDateTime: string): string {
 }
 
 /** The offset suffix's value in minutes east of UTC (e.g. `"-04:00"` -> `-240`, `"Z"` -> `0`). */
-function offsetToMinutes(offset: string): number {
+export function offsetToMinutes(offset: string): number {
   if (offset === "Z") {
     return 0;
   }

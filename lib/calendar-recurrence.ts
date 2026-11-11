@@ -1,3 +1,5 @@
+import { offsetToMinutes } from "./calendar-drag";
+
 export type RecurrenceEnd =
   | { type: "never" }
   | { type: "onDate"; date: string } // YYYY-MM-DD, inclusive last possible occurrence day
@@ -15,10 +17,23 @@ function weekdayToGoogleCode(weekday: number): string {
   return codes[weekday];
 }
 
-/** Formats a date as YYYYMMDDT235959Z (Google's all-day UTC form). */
-function formatUntilDate(date: Date): string {
+/** Formats an absolute instant as Google's `YYYYMMDDTHHMMSSZ` UTC form, via UTC accessors only — independent of the runtime's own local timezone. */
+function formatUntilInstant(utcMs: number): string {
+  const date = new Date(utcMs);
   const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}T235959Z`;
+  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
+}
+
+/**
+ * The absolute UTC instant of 23:59:59 on `dateStr` (`YYYY-MM-DD`) as read in
+ * `offset` — e.g. with `offset = "-05:00"`, this is the instant a clock
+ * reading `-05:00` would call `23:59:59` on that date, not a bare UTC
+ * end-of-day. Mirrors `calendar-drag.ts`'s `moveEventToSlot` offset math
+ * (`Date.UTC(...) - offsetToMinutes(offset) * 60000`).
+ */
+function endOfDayInstant(dateStr: string, offset: string): number {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  return Date.UTC(year, month - 1, day, 23, 59, 59) - offsetToMinutes(offset) * 60000;
 }
 
 /** Parses a date string in YYYYMMDDT235959Z format to YYYY-MM-DD. */
@@ -28,19 +43,19 @@ function parseUntilDate(untilStr: string): string {
   return `${match[1]}-${match[2]}-${match[3]}`;
 }
 
-/** Decrements a date by one day and formats it as YYYYMMDDT235959Z. */
-function formatPreviousDayUntil(date: Date): string {
-  const previousDay = new Date(date);
-  previousDay.setDate(previousDay.getDate() - 1);
-  return formatUntilDate(previousDay);
-}
-
 /**
  * Builds an RRULE string from a RecurrenceRule and the event's start day.
  * Field order: FREQ, then INTERVAL (omitted when 1), then BYDAY (only for WEEKLY),
  * then UNTIL/COUNT depending on end type.
+ *
+ * `eventStartOffset` (default `"Z"`, i.e. bare UTC — this app's own writes
+ * are always `Z`-suffixed instants, see `calendar-events.ts`/`EventEditor`)
+ * is the event's own UTC-offset suffix (e.g. `"-05:00"`). An `onDate` end's
+ * `UNTIL` is computed as end-of-day *in that offset*, not a bare UTC date —
+ * a UTC-dated `UNTIL` can fall before a late-in-the-day occurrence in a
+ * timezone west of UTC, silently excluding it (see this function's tests).
  */
-export function buildRRule(rule: RecurrenceRule, eventStartDay: Date): string {
+export function buildRRule(rule: RecurrenceRule, eventStartDay: Date, eventStartOffset: string = "Z"): string {
   let rrule = `RRULE:FREQ=${rule.freq}`;
 
   if (rule.interval > 1) {
@@ -53,8 +68,7 @@ export function buildRRule(rule: RecurrenceRule, eventStartDay: Date): string {
   }
 
   if (rule.end.type === "onDate") {
-    const untilDate = new Date(rule.end.date + "T23:59:59");
-    rrule += `;UNTIL=${formatUntilDate(untilDate)}`;
+    rrule += `;UNTIL=${formatUntilInstant(endOfDayInstant(rule.end.date, eventStartOffset))}`;
   } else if (rule.end.type === "afterCount") {
     rrule += `;COUNT=${rule.end.count}`;
   }
@@ -93,7 +107,16 @@ export function parseRRule(line: string): RecurrenceRule {
 
 /**
  * Removes any existing UNTIL or COUNT from an RRULE and appends a new UNTIL
- * that ends the day before the given occurrence start date.
+ * that ends one second before the given occurrence's own absolute instant.
+ *
+ * Derived directly from `occurrenceStart.getTime() - 1000` and formatted via
+ * UTC accessors only (`formatUntilInstant`) — never the parsed `Date`'s LOCAL
+ * accessors (`getFullYear`/`getMonth`/`getDate`), which would make the result
+ * depend on the *process's own* timezone rather than the occurrence's. That
+ * previous "whole day before" framing is subtly different from "one second
+ * before this occurrence" when the occurrence isn't at local midnight, but
+ * one-second-before is what's actually correct here and is TZ-independent
+ * by construction.
  */
 export function truncateRRuleBefore(line: string, occurrenceStart: Date): string {
   // Remove UNTIL and COUNT from the RRULE
@@ -103,8 +126,8 @@ export function truncateRRuleBefore(line: string, occurrenceStart: Date): string
   // Reconstruct the RRULE
   let result = "RRULE:" + filteredParts.join(";");
 
-  // Append new UNTIL for the day before occurrenceStart
-  result += `;UNTIL=${formatPreviousDayUntil(occurrenceStart)}`;
+  // Append new UNTIL, one second before occurrenceStart's own instant.
+  result += `;UNTIL=${formatUntilInstant(occurrenceStart.getTime() - 1000)}`;
 
   return result;
 }

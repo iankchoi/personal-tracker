@@ -28,6 +28,37 @@ describe("buildRRule", () => {
     expect(buildRRule({ freq: "DAILY", interval: 1, end: { type: "afterCount", count: 5 } }, new Date(2026, 10, 11)))
       .toBe("RRULE:FREQ=DAILY;COUNT=5");
   });
+
+  // --- Review fix round: Important I2/I3 — UNTIL must respect the event's own UTC offset ---
+
+  test("buildRRule's onDate UNTIL, for an event late in the day west of UTC, lands after that day's own occurrence instant (not before it)", () => {
+    // 2026-12-31 20:00 in -05:00 is 2027-01-01 01:00 UTC. A bare UTC-dated
+    // UNTIL (20261231T235959Z) would be *before* that instant, excluding
+    // the 2026-12-31 occurrence entirely. The fix must push UNTIL out far
+    // enough, in the event's own -05:00 offset, that it lands after it.
+    const result = buildRRule(
+      { freq: "WEEKLY", interval: 1, end: { type: "onDate", date: "2026-12-31" } },
+      new Date(2026, 11, 31, 20, 0),
+      "-05:00",
+    );
+
+    const untilMatch = result.match(/UNTIL=(\d{8}T\d{6}Z)/);
+    expect(untilMatch).not.toBeNull();
+    const untilIso = untilMatch![1].replace(
+      /(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/,
+      "$1-$2-$3T$4:$5:$6Z",
+    );
+    const untilInstant = new Date(untilIso).getTime();
+    const occurrenceInstant = new Date("2026-12-31T20:00:00-05:00").getTime();
+
+    expect(untilInstant).toBeGreaterThan(occurrenceInstant);
+  });
+
+  test("buildRRule's onDate UNTIL defaults to the bare UTC day-end when no offset is given (unchanged existing behavior)", () => {
+    expect(
+      buildRRule({ freq: "WEEKLY", interval: 1, end: { type: "onDate", date: "2026-12-31" } }, new Date(2026, 10, 11)),
+    ).toBe("RRULE:FREQ=WEEKLY;BYDAY=WE;UNTIL=20261231T235959Z");
+  });
 });
 
 describe("parseRRule", () => {
@@ -79,5 +110,17 @@ describe("truncateRRuleBefore and isFirstOccurrence", () => {
   test("isFirstOccurrence compares date-only (all-day) start strings too", () => {
     expect(isFirstOccurrence("2026-11-11", "2026-11-11")).toBe(true);
     expect(isFirstOccurrence("2026-11-11", "2026-11-25")).toBe(false);
+  });
+
+  // --- Review fix round: Important I4 — truncate must be TZ-independent (UTC-instant math, not local accessors) ---
+
+  test("truncateRRuleBefore derives UNTIL from the occurrence's own absolute instant (one second before it), not local calendar-day accessors", () => {
+    // 2026-11-25T09:00:00-05:00 is 2026-11-25T14:00:00Z. One second before
+    // that instant is 2026-11-25T13:59:59Z. A local-accessor, "whole day
+    // before" implementation would instead produce 2026-11-24T235959Z —
+    // the wrong instant, and (critically) dependent on the *runtime's* own
+    // timezone rather than the occurrence's.
+    const result = truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date("2026-11-25T09:00:00-05:00"));
+    expect(result).toBe("RRULE:FREQ=WEEKLY;UNTIL=20261125T135959Z");
   });
 });

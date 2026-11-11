@@ -365,6 +365,15 @@ export function EventEditor(props: {
               ? [buildRRule(recurrence, allDay ? new Date(startDate) : new Date(`${startDate}T${startTime}:00`))]
               : []
             : undefined,
+        // The zone the recurrence pattern above expands in. Always included
+        // (not gated on `recurrence` being non-empty here) because a
+        // "following" split edit that never touches Repeat still carries the
+        // master's own rule forward server-side (see `EventActionInput`'s
+        // own doc) — `buildEventPayload` is the one place that actually
+        // decides whether a `timeZone` ends up in the payload, based on
+        // whether `recurrence` is non-empty there, so including it
+        // unconditionally here is harmless for a one-off save.
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
       // An edit to a specific occurrence of a recurring event can't be sent

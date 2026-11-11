@@ -10,8 +10,12 @@ export type GoogleCalendarEvent = {
   id: string;
   calendarId: string;
   summary: string;
-  start: { dateTime?: string; date?: string };
-  end: { dateTime?: string; date?: string };
+  // `timeZone` is the IANA zone (e.g. "America/New_York") a `recurrence`
+  // pattern expands in — Google's API documents it as required whenever an
+  // event carries `recurrence`, since it's what the rule's DST transitions
+  // resolve against. Absent on a one-off event.
+  start: { dateTime?: string; date?: string; timeZone?: string };
+  end: { dateTime?: string; date?: string; timeZone?: string };
   recurringEventId?: string;
   recurrence?: string[];
   colorId?: string;

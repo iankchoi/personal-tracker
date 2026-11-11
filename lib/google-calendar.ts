@@ -223,6 +223,34 @@ export async function updateEvent(
 }
 
 /**
+ * Fetches a single event from the specified calendar. Stamps `calendarId`
+ * onto the returned object. Throws on a non-ok response.
+ *
+ * Used to read a recurring series' master event before computing a scope-aware
+ * write (e.g. "update this instance", "update this and following", "update all").
+ */
+export async function getEvent(
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+): Promise<GoogleCalendarEvent> {
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Google getEvent request failed with status ${response.status}`);
+  }
+
+  const data = (await response.json()) as Omit<GoogleCalendarEvent, "calendarId">;
+  return { ...data, calendarId };
+}
+
+/**
  * Deletes an event from the specified calendar. Throws on a non-ok response.
  *
  * Also sends `sendUpdates=all` (see `eventWriteParams`), so deleting an event

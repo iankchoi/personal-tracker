@@ -1,17 +1,25 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { createEventAction, deleteEventAction, updateEventAction, type EventActionInput } from "../../lib/actions/calendar-events";
+import {
+  createEventAction,
+  deleteEventAction,
+  updateEventAction,
+  type EventActionInput,
+  type RecurrenceEditScope,
+} from "../../lib/actions/calendar-events";
 import type { CalendarColorToken } from "../../lib/calendar-colors";
 import { allDayEndToExclusive } from "../../lib/calendar-dates";
 import { buildRRule, parseRRule, type RecurrenceRule } from "../../lib/calendar-recurrence";
 import type { GoogleCalendarListEntry } from "../../lib/google-calendar";
 
+import { isTypingTarget } from "./CalendarShortcuts";
 import { ColorPicker } from "./ColorPicker";
 import { LocationAutocomplete } from "./LocationAutocomplete";
 import { RecurrenceField } from "./RecurrenceField";
+import { RecurrenceScopeDialog } from "./RecurrenceScopeDialog";
 import { RepeatIcon } from "./CalendarIcons";
 
 /** Icons match the sidebar's inline-SVG style exactly: `viewBox="0 0 24 24"`, 16x16 via CSS, `stroke-width: 1.6`, `stroke: currentColor`, no fill. */
@@ -137,7 +145,7 @@ function defaultWhen() {
  */
 export function EventEditor(props: {
   mode: "create" | "edit";
-  initial: Partial<EventActionInput> & { eventId?: string; calendarId: string };
+  initial: Partial<EventActionInput> & { eventId?: string; calendarId: string; recurringEventId?: string };
   calendars: GoogleCalendarListEntry[];
   onSaved(): void;
   onDeleted(): void;
@@ -181,9 +189,42 @@ export function EventEditor(props: {
     initial.recurrence?.[0] ? parseRRule(initial.recurrence[0]) : null,
   );
   const [recurrenceTouched, setRecurrenceTouched] = useState(false);
+  // A snapshot of the Repeat field's rule as it stood when the editor opened —
+  // deliberately never updated after mount. Compared against the live
+  // `recurrence` state to decide `allowThisEvent` for the Save scope dialog: a
+  // single occurrence can never carry its own different recurrence rule in
+  // Google's model, so once the user has changed Repeat, "This event" has to
+  // be omitted from the choices.
+  const [initialRecurrenceSnapshot] = useState<RecurrenceRule | null>(
+    initial.recurrence?.[0] ? parseRRule(initial.recurrence[0]) : null,
+  );
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when Save/Delete is pressed on an occurrence of a recurring event
+  // (`initial.recurringEventId` present) — holds the built `EventActionInput`
+  // (for Save) until the user picks a scope in `RecurrenceScopeDialog`, rather
+  // than calling `updateEventAction`/`deleteEventAction` immediately. A
+  // one-off event (`initial.recurringEventId` absent) never sets these, so the
+  // dialog never renders for it.
+  const [pendingSaveInput, setPendingSaveInput] = useState<EventActionInput | null>(null);
+  const [pendingDelete, setPendingDelete] = useState(false);
+
+  const recurrenceChanged = JSON.stringify(recurrence) !== JSON.stringify(initialRecurrenceSnapshot);
+
+  /**
+   * The pre-edit occurrence's own end, in the shape `updateEventAction`/
+   * `deleteEventAction`'s `occurrenceOriginalEnd` need: Google's raw exclusive
+   * form for an all-day event (converting `initial.end`, the editor's
+   * inclusive display value, back via `allDayEndToExclusive` — the same
+   * conversion `handleSave` already applies to the *new* `end` below), or
+   * `initial.end` untouched for a timed event. `occurrenceOriginalStart` needs
+   * no such conversion — only Google's `end.date` is exclusive, never
+   * `start.date` — so it's always `initial.start` as-is.
+   */
+  function occurrenceOriginalEnd(): string {
+    return initial.allDay ? allDayEndToExclusive(initial.end!) : initial.end!;
+  }
 
   /**
    * A title made only of whitespace is as useless as an empty one, and saving
@@ -213,8 +254,39 @@ export function EventEditor(props: {
     }
   }
 
-  async function handleSave() {
+  /**
+   * Actually performs the create/update call, optionally with the scope
+   * fields a recurring-event edit picked in `RecurrenceScopeDialog`. Split out
+   * of `handleSave` so the recurring-event path can hold the built `input` in
+   * state (`pendingSaveInput`) while the dialog is up, without re-deriving it
+   * (and re-reading possibly-stale field state) once a scope is chosen.
+   */
+  async function submitSave(
+    input: EventActionInput,
+    scopeFields?: { scope: RecurrenceEditScope; recurringEventId?: string; occurrenceOriginalStart?: string; occurrenceOriginalEnd?: string },
+  ) {
     setSaving(true);
+    setError(null);
+    try {
+      if (mode === "create") {
+        await createEventAction(input);
+      } else {
+        await updateEventAction({ ...input, eventId: initial.eventId!, ...scopeFields });
+      }
+      // The calendar grid is server-rendered straight from Google, so without
+      // a revalidation the popup closes onto visibly stale data until the user
+      // reloads by hand — same `router.refresh()` pattern `TaskCheckbox` uses
+      // after `completeTaskAction`.
+      router.refresh();
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSave() {
     setError(null);
     try {
       // Meet, Notify, Color and Guests are the four fields where "the value this session
@@ -295,32 +367,33 @@ export function EventEditor(props: {
             : undefined,
       };
 
-      if (mode === "create") {
-        await createEventAction(input);
-      } else {
-        await updateEventAction({ ...input, eventId: initial.eventId! });
+      // An edit to a specific occurrence of a recurring event can't be sent
+      // straight to `updateEventAction` — Google needs to know *which*
+      // occurrences the edit applies to ("this", "all", or "following"), and
+      // only the user can say. Hold the built `input` and let
+      // `RecurrenceScopeDialog` (rendered below) collect that choice; a
+      // one-off event (no `recurringEventId`) has no such ambiguity and saves
+      // immediately, exactly as before this task.
+      if (mode === "edit" && initial.recurringEventId) {
+        setPendingSaveInput(input);
+        return;
       }
-      // The calendar grid is server-rendered straight from Google, so without
-      // a revalidation the popup closes onto visibly stale data until the user
-      // reloads by hand — same `router.refresh()` pattern `TaskCheckbox` uses
-      // after `completeTaskAction`.
-      router.refresh();
-      onSaved();
+
+      await submitSave(input);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
-    } finally {
-      setSaving(false);
     }
   }
 
-  async function handleDelete() {
+  /** Mirrors `submitSave` for Delete: the real `deleteEventAction` call, optionally scoped. */
+  async function submitDelete(scopeFields?: { scope: RecurrenceEditScope; recurringEventId?: string; occurrenceOriginalStart?: string }) {
     if (!initial.eventId) {
       return;
     }
     setDeleting(true);
     setError(null);
     try {
-      await deleteEventAction({ calendarId, eventId: initial.eventId });
+      await deleteEventAction({ calendarId, eventId: initial.eventId, ...scopeFields });
       router.refresh();
       onDeleted();
     } catch (err) {
@@ -329,6 +402,46 @@ export function EventEditor(props: {
       setDeleting(false);
     }
   }
+
+  async function handleDelete() {
+    if (!initial.eventId) {
+      return;
+    }
+
+    // Same scope ambiguity as Save, resolved the same way — except deleting
+    // never changes the recurrence rule itself, so unlike Save's
+    // `recurrenceChanged` check, "This event" is always a valid choice here.
+    if (initial.recurringEventId) {
+      setPendingDelete(true);
+      return;
+    }
+
+    await submitDelete();
+  }
+
+  // A document-level keydown listener, scoped to this component's mount
+  // lifecycle exactly like `ModalShell`'s own Escape listener, so Delete/
+  // Backspace deletes the event being edited no matter which non-input
+  // control inside the editor currently holds focus. Guarded by
+  // `isTypingTarget` (reused from `CalendarShortcuts.tsx` rather than
+  // reimplemented here) so a stray Backspace while typing in the title,
+  // description, or guest-email input — all plain `<input>`/`<textarea>`
+  // elements, already covered by that check — edits text instead of deleting
+  // the event.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Delete" && event.key !== "Backspace") {
+        return;
+      }
+      if (isTypingTarget(document.activeElement)) {
+        return;
+      }
+      handleDelete();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  });
 
   return (
     <div className="event-editor" role="dialog" aria-label={mode === "create" ? "Create event" : "Edit event"}>
@@ -555,6 +668,38 @@ export function EventEditor(props: {
           Save
         </button>
       </div>
+
+      {pendingSaveInput && (
+        <RecurrenceScopeDialog
+          allowThisEvent={!recurrenceChanged}
+          onChoose={(scope) => {
+            const input = pendingSaveInput;
+            setPendingSaveInput(null);
+            submitSave(input, {
+              scope,
+              recurringEventId: initial.recurringEventId,
+              occurrenceOriginalStart: initial.start,
+              occurrenceOriginalEnd: occurrenceOriginalEnd(),
+            });
+          }}
+          onCancel={() => setPendingSaveInput(null)}
+        />
+      )}
+
+      {pendingDelete && (
+        <RecurrenceScopeDialog
+          allowThisEvent={true}
+          onChoose={(scope) => {
+            setPendingDelete(false);
+            submitDelete({
+              scope,
+              recurringEventId: initial.recurringEventId,
+              occurrenceOriginalStart: initial.start,
+            });
+          }}
+          onCancel={() => setPendingDelete(false)}
+        />
+      )}
     </div>
   );
 }

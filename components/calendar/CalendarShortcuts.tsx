@@ -19,7 +19,7 @@ const VIEW_FOR_KEY: Record<string, ViewType> = {
  * stray keystroke should be typed into rather than interpreted as a
  * single-letter Calendar shortcut.
  */
-function isTypingTarget(element: Element | null): boolean {
+export function isTypingTarget(element: Element | null): boolean {
   if (!element) {
     return false;
   }

@@ -567,6 +567,80 @@ test("the calendar picker is disabled while editing an existing event, and live 
   expect(screen.getByLabelText(/calendar/i)).toBeEnabled();
 });
 
+test("saving an edit to a recurring event shows the scope dialog before calling updateEventAction", async () => {
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "occ1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false, recurringEventId: "master1" }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  await userEvent.click(screen.getByText("Save"));
+  expect(await screen.findByRole("button", { name: /all events/i })).toBeInTheDocument();
+  expect(mockUpdateEventAction).not.toHaveBeenCalled();
+});
+
+test("saving an edit to a one-off event never shows the scope dialog", async () => {
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "e1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  await userEvent.click(screen.getByText("Save"));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: /all events/i })).not.toBeInTheDocument();
+});
+
+test("picking a scope after Save sends it, plus the pre-edit occurrenceOriginalStart/End and recurringEventId", async () => {
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "occ1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false, recurringEventId: "master1" }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  await userEvent.click(screen.getByText("Save"));
+  await userEvent.click(await screen.findByRole("button", { name: /all events/i }));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({
+      scope: "all", recurringEventId: "master1",
+      occurrenceOriginalStart: "2026-11-11T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-11T09:30:00-05:00",
+    }),
+  );
+});
+
+test("picking a scope after Save on an all-day recurring event sends occurrenceOriginalEnd in Google's raw exclusive form, not the editor's inclusive display value", async () => {
+  // initial.end is the editor's INCLUSIVE display value (see googleEventToEditorInitial's
+  // allDayEndToInclusive conversion) — a 1-day all-day event displayed as the same day it
+  // starts, which is one day *before* Google's own raw exclusive end.date.
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "occ1", calendarId: "primary", title: "Standup", start: "2026-11-11", end: "2026-11-11", allDay: true, recurringEventId: "master1" }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  await userEvent.click(screen.getByText("Save"));
+  await userEvent.click(await screen.findByRole("button", { name: /all events/i }));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({ occurrenceOriginalStart: "2026-11-11", occurrenceOriginalEnd: "2026-11-12" }),
+  );
+});
+
+test("clicking Delete on a recurring event shows the scope dialog before calling deleteEventAction", async () => {
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "occ1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false, recurringEventId: "master1" }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  await userEvent.click(screen.getByText("Delete"));
+  expect(await screen.findByRole("button", { name: /all events/i })).toBeInTheDocument();
+  expect(mockDeleteEventAction).not.toHaveBeenCalled();
+});
+
+test("pressing Backspace while the editor is open deletes a one-off event, same as clicking Delete", async () => {
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "e1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  await userEvent.keyboard("{Backspace}");
+  await vi.waitFor(() => expect(mockDeleteEventAction).toHaveBeenCalledWith({ calendarId: "primary", eventId: "e1" }));
+});
+
+test("pressing Delete while focus is in the title input does not delete the event", async () => {
+  render(
+    <EventEditor mode="edit" initial={{ eventId: "e1", calendarId: "primary", title: "Standup", start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00", allDay: false }} calendars={cals} onSaved={vi.fn()} onDeleted={vi.fn()} onCancel={vi.fn()} />,
+  );
+  screen.getByLabelText("Title").focus();
+  await userEvent.keyboard("{Delete}");
+  expect(mockDeleteEventAction).not.toHaveBeenCalled();
+});
+
 test("saving a new event with a custom weekly recurrence sends the matching RRULE line", async () => {
   render(
     <EventEditor

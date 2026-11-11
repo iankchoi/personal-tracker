@@ -11,7 +11,7 @@ export function dayDelta(from: Date, to: Date): number {
 }
 
 /** The ISO 8601 UTC-offset suffix on an offset-carrying date-time string (e.g. `"-04:00"` or `"Z"`). */
-function extractOffset(isoDateTime: string): string {
+export function extractOffset(isoDateTime: string): string {
   const match = isoDateTime.match(/([+-]\d{2}:\d{2}|Z)$/);
   return match ? match[0] : "Z";
 }

@@ -128,6 +128,26 @@ function splitDateTime(
   return { date: dateInputValue(parsed), time: timeInputValue(parsed) };
 }
 
+/**
+ * The ISO 8601 UTC-offset suffix (e.g. `"-05:00"`) of this runtime's own
+ * local timezone at the instant `date` represents. Unlike `calendar-drag.ts`'s
+ * `extractOffset` — which reads an *explicit* offset already present on an
+ * ISO string — there's no such string here yet: `date` was built from the
+ * editor's own date/time inputs (see `combineDateTime`), so its offset is
+ * only implicit, in `Date.prototype.getTimezoneOffset()`. This is the
+ * complement `buildRRule`'s `eventStartOffset` needs: without it, an
+ * "ends on date" `UNTIL` defaults to bare UTC, which can fall *before* a
+ * late-in-the-day occurrence for any zone west of UTC (see
+ * `calendar-recurrence.ts`'s own doc on `buildRRule`).
+ */
+function localOffsetAt(date: Date): string {
+  const minutesEastOfUtc = -date.getTimezoneOffset();
+  const sign = minutesEastOfUtc < 0 ? "-" : "+";
+  const abs = Math.abs(minutesEastOfUtc);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
 /** Default when/time for a brand-new event with no clicked slot to seed from: today, 9:00-10:00 — matching `QuickCreatePopup`'s own 9 AM / 1-hour-default convention. */
 function defaultWhen() {
   const dateStr = dateInputValue(new Date());
@@ -337,6 +357,14 @@ export function EventEditor(props: {
       // All-day `end` converts from the inclusive last-day the user sees back
       // to Google's exclusive `end.date` (see `allDayEndToExclusive`) — the
       // mirror of the `-1` day `EventTaskModal` applied when loading it.
+      //
+      // The event's own start day/instant, used below both to decide
+      // `buildRRule`'s weekly BYDAY and (for a timed event) to compute its
+      // real UTC-offset suffix via `localOffsetAt` — passed to `buildRRule`
+      // so an "ends on date" `UNTIL` is computed in *this* offset rather
+      // than defaulting to bare UTC (see `localOffsetAt`'s own doc).
+      const eventStartDay = allDay ? new Date(startDate) : new Date(`${startDate}T${startTime}:00`);
+
       const input: EventActionInput = {
         calendarId,
         title,
@@ -358,11 +386,14 @@ export function EventEditor(props: {
         // when cleared back to "Does not repeat" (explicitly removing any
         // existing RRULE) or the freshly built RRULE line otherwise. The
         // event's own start day (not `new Date()`) decides `buildRRule`'s
-        // weekly BYDAY, matching the day the event will actually recur on.
+        // weekly BYDAY, matching the day the event will actually recur on,
+        // and (for a timed event) its own offset decides an "ends on date"
+        // end's `UNTIL` — an all-day event has no time-of-day/offset of its
+        // own, so that argument is left at `buildRRule`'s bare-UTC default.
         recurrence:
           mode === "create" || recurrenceTouched
             ? recurrence
-              ? [buildRRule(recurrence, allDay ? new Date(startDate) : new Date(`${startDate}T${startTime}:00`))]
+              ? [buildRRule(recurrence, eventStartDay, allDay ? undefined : localOffsetAt(eventStartDay))]
               : []
             : undefined,
         // The zone the recurrence pattern above expands in. Always included

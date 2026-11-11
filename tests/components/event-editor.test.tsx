@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -677,4 +677,61 @@ test("saving a new event with a custom weekly recurrence sends the matching RRUL
   await userEvent.click(screen.getByText("Save"));
   await vi.waitFor(() => expect(mockCreateEventAction).toHaveBeenCalled());
   expect(mockCreateEventAction.mock.calls[0][0].recurrence).toEqual([expect.stringContaining("FREQ=WEEKLY;INTERVAL=2")]);
+});
+
+// --- Follow-up fix round: Fix 2 — buildRRule's eventStartOffset must be the event's own offset, not the buggy "Z" default ---
+
+test("saving a new recurring event late in the day in a negative UTC offset produces an UNTIL that still includes the chosen end date's own occurrence", async () => {
+  // 2026-12-31 20:00 in America/New_York (-05:00, no DST in December) is
+  // 2027-01-01 01:00 UTC. A bare-UTC UNTIL of 2026-12-31T23:59:59Z would be
+  // *before* that instant, silently excluding the 2026-12-31 occurrence —
+  // exactly the bug `buildRRule`'s (already-correct) `eventStartOffset`
+  // parameter exists to fix, as long as a real offset actually reaches it.
+  const originalTz = process.env.TZ;
+  process.env.TZ = "America/New_York";
+
+  try {
+    render(
+      <EventEditor
+        mode="create"
+        initial={{ calendarId: "primary" }}
+        calendars={cals}
+        onSaved={vi.fn()}
+        onDeleted={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await userEvent.type(screen.getByLabelText("Title"), "Late night call");
+    fireEvent.change(screen.getByLabelText(/start date/i), { target: { value: "2026-12-31" } });
+    fireEvent.change(screen.getByLabelText(/start time/i), { target: { value: "20:00" } });
+    fireEvent.change(screen.getByLabelText(/^end date$/i), { target: { value: "2026-12-31" } });
+    fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: "20:30" } });
+
+    await userEvent.selectOptions(screen.getByLabelText("Repeat"), "custom");
+    await userEvent.selectOptions(screen.getByLabelText(/ends/i), "onDate");
+
+    // Both the main event's own "End date" field and the recurrence
+    // builder's "ends on date" field share the aria-label "End date" — the
+    // recurrence one is the second to appear in the DOM.
+    const endDateInputs = screen.getAllByLabelText(/^end date$/i);
+    fireEvent.change(endDateInputs[1], { target: { value: "2026-12-31" } });
+
+    await userEvent.click(screen.getByText("Save"));
+    await vi.waitFor(() => expect(mockCreateEventAction).toHaveBeenCalled());
+
+    const recurrence = mockCreateEventAction.mock.calls[0][0].recurrence as string[];
+    const untilMatch = recurrence[0].match(/UNTIL=(\d{8}T\d{6}Z)/);
+    expect(untilMatch).not.toBeNull();
+    const untilIso = untilMatch![1].replace(
+      /(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/,
+      "$1-$2-$3T$4:$5:$6Z",
+    );
+    const untilInstant = new Date(untilIso).getTime();
+    const occurrenceInstant = new Date("2026-12-31T20:00:00-05:00").getTime();
+
+    expect(untilInstant).toBeGreaterThan(occurrenceInstant);
+  } finally {
+    process.env.TZ = originalTz;
+  }
 });

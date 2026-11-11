@@ -781,3 +781,60 @@ test("updateEventAction with scope 'following' on the series' first occurrence (
   expect(typeof payload.end.timeZone).toBe("string");
   expect(payload.end.timeZone.length).toBeGreaterThan(0);
 });
+
+// --- Follow-up fix round: Fix 2 — correctWeeklyByDay must use a real offset, not buildRRule's buggy "Z" default ---
+
+/** Parses a Google `YYYYMMDDTHHMMSSZ` UNTIL value back to an epoch-ms instant, the same shape `calendar-recurrence.test.ts` uses. */
+function untilToEpochMs(rruleLine: string): number {
+  const match = rruleLine.match(/UNTIL=(\d{8}T\d{6}Z)/);
+  if (!match) throw new Error(`no UNTIL in ${rruleLine}`);
+  const iso = match[1].replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1-$2-$3T$4:$5:$6Z");
+  return new Date(iso).getTime();
+}
+
+test("updateEventAction with scope 'all' corrects an onDate-ending WEEKLY RRULE's BYDAY using the master's own offset, not bare UTC", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    // 2026-11-11 is a Wednesday, at 20:00 in -05:00 — late enough in the day
+    // that a bare-UTC UNTIL would land before the -05:00 end-of-day instant.
+    start: { dateTime: "2026-11-11T20:00:00-05:00" }, end: { dateTime: "2026-11-11T20:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=WE;UNTIL=20261231T235959Z"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  // Shifted from Wednesday 2026-11-25 to Thursday 2026-11-26 — a day later — forces the BYDAY correction path.
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-26T20:00:00-05:00", end: "2026-11-26T20:30:00-05:00" }),
+    eventId: "occ3", scope: "all", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T20:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T20:30:00-05:00",
+  });
+
+  const payload = mockUpdateEvent.mock.calls[0][3];
+  // 23:59:59 on 2026-12-31 *in the master's own -05:00 offset*, i.e.
+  // 2027-01-01T04:59:59Z — not the bare-UTC 2026-12-31T23:59:59Z the buggy
+  // default would produce.
+  expect(untilToEpochMs(payload.recurrence[0])).toBe(new Date("2027-01-01T04:59:59Z").getTime());
+});
+
+test("updateEventAction with scope 'following' (a drag, not the first occurrence) corrects the new series' onDate-ending RRULE using the occurrence's own offset from input.start, not bare UTC", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T20:00:00-05:00" }, end: { dateTime: "2026-11-11T20:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=WE;UNTIL=20261231T235959Z"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  // Not the first occurrence (2026-11-25 != master's 2026-11-11); dragged
+  // onto Thursday 2026-11-26, still at 20:00 -05:00 — a drag's own
+  // `moveEventToSlot` preserves the event's real offset on `input.start`,
+  // unlike an `EventEditor` save (which always normalizes to "Z").
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-26T20:00:00-05:00", end: "2026-11-26T20:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T20:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T20:30:00-05:00",
+  });
+
+  const createdPayload = mockCreateEvent.mock.calls[0][2];
+  expect(untilToEpochMs(createdPayload.recurrence[0])).toBe(new Date("2027-01-01T04:59:59Z").getTime());
+});

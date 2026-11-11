@@ -2,7 +2,7 @@
 
 import { auth } from "../../auth";
 import type { CalendarColorToken } from "../calendar-colors";
-import { dayDelta, shiftDateString } from "../calendar-drag";
+import { dayDelta, extractOffset, shiftDateString } from "../calendar-drag";
 import { buildRRule, isFirstOccurrence, parseRRule, truncateRRuleBefore } from "../calendar-recurrence";
 import { colorIdForToken, tokenForColorId } from "../calendar-event-colors";
 import {
@@ -301,14 +301,22 @@ function isRoundTrippableWeeklyRule(rruleLine: string): boolean {
  * faithful; otherwise the line is returned completely untouched — leaving a
  * rule alone is always safer than silently mangling it (see that function's
  * own comment for why e.g. a multi-weekday `BYDAY` disqualifies a line).
+ *
+ * `newStartDayOffset` (default `"Z"`, matching `buildRRule`'s own default)
+ * is forwarded straight to `buildRRule` as its `eventStartOffset` — an
+ * onDate-ending rule's regenerated `UNTIL` must be computed in the event's
+ * own offset, not bare UTC, or a late-in-the-day occurrence west of UTC can
+ * be silently excluded (see `buildRRule`'s own doc). Each caller passes
+ * whatever real offset it actually has on hand; there's deliberately no
+ * attempt to invent one here.
  */
-function correctWeeklyByDay(recurrenceLines: string[], newStartDay: Date): string[] {
+function correctWeeklyByDay(recurrenceLines: string[], newStartDay: Date, newStartDayOffset: string = "Z"): string[] {
   return mapRRuleLine(recurrenceLines, (line) => {
     const rule = parseRRule(line);
     if (rule.freq !== "WEEKLY" || !isRoundTrippableWeeklyRule(line)) {
       return line;
     }
-    return buildRRule(rule, newStartDay);
+    return buildRRule(rule, newStartDay, newStartDayOffset);
   });
 }
 
@@ -343,7 +351,15 @@ function wholeSeriesRecurrenceOverride(
     return undefined;
   }
 
-  return correctWeeklyByDay(master.recurrence, newStartDay);
+  // The master's own offset (from its real, Google-stored `start.dateTime`)
+  // — not the shifted value's, which `shiftMasterTimes` always normalizes to
+  // bare UTC via `toISOString()` — so an onDate-ending rule's regenerated
+  // `UNTIL` keeps respecting the master's own offset instead of silently
+  // flattening to `"Z"`. All-day masters have no time-of-day/offset concept,
+  // so `correctWeeklyByDay` is left at its bare-UTC default for them.
+  const masterOffset = input.allDay ? undefined : extractOffset(master.start.dateTime as string);
+
+  return correctWeeklyByDay(master.recurrence, newStartDay, masterOffset);
 }
 
 /** PATCHes the master with the given input's other fields plus its shifted start/end (and corrected `BYDAY`, if the weekday moved) — the "all" scope's whole-series edit, also used by "following" when it collapses onto the series' first occurrence. */
@@ -457,9 +473,18 @@ export async function updateEventAction(
       return patchWholeSeries(accessToken, { ...input, occurrenceOriginalStart, occurrenceOriginalEnd }, masterId, master);
     }
 
+    // `input.start`'s own offset, when it has one (a drag's `moveEventToSlot`/
+    // `shiftEventToDay` preserve the event's real offset there; an
+    // `EventEditor` save always normalizes to `"Z"`, in which case this is a
+    // no-op). Threaded through so an onDate-ending rule's regenerated
+    // `UNTIL` respects it instead of silently flattening to bare UTC.
     const newSeriesRecurrence =
       input.recurrence === undefined
-        ? correctWeeklyByDay(master.recurrence!, input.allDay ? parseDateOnly(input.start) : new Date(input.start))
+        ? correctWeeklyByDay(
+            master.recurrence!,
+            input.allDay ? parseDateOnly(input.start) : new Date(input.start),
+            input.allDay ? undefined : extractOffset(input.start),
+          )
         : input.recurrence.length > 0
           ? input.recurrence
           : undefined;

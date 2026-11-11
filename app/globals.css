@@ -475,11 +475,26 @@ a { color: inherit; text-decoration: none; }
 .color-swatch.cv { background: var(--cv-accent); }
 .color-swatch[aria-checked="true"] { border-color: var(--text); }
 
+/* ---- recurrence field (Task 8): Repeat select + its Custom... builder ---- */
+.recurrence-field { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.recurrence-custom { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.recurrence-custom label { font-size: 13px; color: var(--muted); }
+
 /* ---- error / reconnect banner states (ported from .taste-skill/build/home-error.html) ---- */
 .error-block { display: flex; align-items: center; gap: 8px; padding: 18px 0; color: var(--text); font-size: 13px; flex-wrap: wrap; }
 .error-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--negative); flex: none; }
 .error-dot.warn { background: var(--warning); }
 .error-retry { background: none; border: 0; padding: 0; margin-left: 4px; color: var(--cv-accent); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---- recurrence scope dialog (Task 5): three-choice dialog for edit scope ---- */
+.recurrence-scope-dialog { width: 320px; max-width: 100%; padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 16px; }
+.recurrence-scope-dialog h2 { font-size: 16px; font-weight: 600; margin: 0; }
+.rsd-buttons { display: flex; flex-direction: column; gap: 8px; }
+.rsd-choice { height: 40px; padding: 0 16px; border: 1px solid var(--control); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; }
+.rsd-choice:hover { background: var(--raised); }
+.rsd-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; border-top: 1px solid var(--rule); }
+.rsd-cancel { height: 38px; padding: 0 16px; border: 1px solid var(--control); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.rsd-cancel:hover { background: var(--raised); }
 
 /* ---- calendar responsive overrides ---- */
 @media (max-width: 860px) {

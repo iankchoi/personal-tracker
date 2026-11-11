@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
 const { mockRefresh, mockUpdateEventAction, mockUpdateTaskAction, mockCompleteTaskAction } = vi.hoisted(() => ({
@@ -371,5 +372,92 @@ test("dragging a timed task into the all-day row clears its dueTime", async () =
   fireDragTo(screen.getByText("Follow up"), alldayRow);
   await vi.waitFor(() =>
     expect(mockUpdateTaskAction).toHaveBeenCalledWith(expect.objectContaining({ taskId: "t1", dueTime: null })),
+  );
+});
+
+test("a recurring all-day event's chip shows the repeat icon", () => {
+  render(
+    <Harness
+      days={sevenDays}
+      events={[{ ...allDayEvent({ id: "occ1", start: "2026-10-20", end: "2026-10-21" }), recurringEventId: "master1" }]}
+    />
+  );
+  expect(screen.getByTestId("wg-event-repeat-icon")).toBeInTheDocument();
+});
+
+test("a non-recurring all-day event's chip shows no repeat icon", () => {
+  render(<Harness days={sevenDays} events={[allDayEvent({ id: "e1", start: "2026-10-20", end: "2026-10-21" })]} />);
+  expect(screen.queryByTestId("wg-event-repeat-icon")).not.toBeInTheDocument();
+});
+
+test("a recurring timed event block shows the repeat icon", () => {
+  render(<Harness days={[oneDay]} events={[{ ...timedEvent({ id: "occ1" }), recurringEventId: "master1" }]} />);
+  expect(screen.getByTestId("wg-event-repeat-icon")).toBeInTheDocument();
+});
+
+test("a non-recurring timed event block shows no repeat icon", () => {
+  render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })] } />);
+  expect(screen.queryByTestId("wg-event-repeat-icon")).not.toBeInTheDocument();
+});
+
+test("dragging a recurring all-day event chip shows the scope dialog instead of saving immediately", async () => {
+  render(
+    <Harness
+      days={sevenDays}
+      events={[{ ...allDayEvent({ id: "occ1", start: "2026-10-20", end: "2026-10-21" }), recurringEventId: "master1" }]}
+    />,
+  );
+  fireDragTo(within(alldayCellForDay(20)).getByText("Conference"), alldayCellForDay(25));
+  expect(await screen.findByRole("button", { name: /all events/i })).toBeInTheDocument();
+  expect(mockUpdateEventAction).not.toHaveBeenCalled();
+});
+
+test("dragging a one-off all-day event never shows the scope dialog", async () => {
+  render(<Harness days={sevenDays} events={[allDayEvent({ id: "e1", start: "2026-10-20", end: "2026-10-21" })]} />);
+  fireDragTo(screen.getByText("Conference"), alldayCellForDay(25));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: /all events/i })).not.toBeInTheDocument();
+});
+
+test("dragging a recurring timed event block shows the scope dialog instead of saving immediately", async () => {
+  render(<Harness days={[oneDay]} events={[{ ...timedEvent({ id: "occ1" }), recurringEventId: "master1" }]} />);
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Standup"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT });
+  expect(await screen.findByRole("button", { name: /all events/i })).toBeInTheDocument();
+  expect(mockUpdateEventAction).not.toHaveBeenCalled();
+});
+
+test("dragging a one-off timed event never shows the scope dialog", async () => {
+  render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })]} />);
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Standup"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT });
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: /all events/i })).not.toBeInTheDocument();
+});
+
+test("picking 'This event' after dragging a recurring timed event sends scope 'this' and the dragged occurrence's own id", async () => {
+  render(<Harness days={[oneDay]} events={[{ ...timedEvent({ id: "occ1" }), recurringEventId: "master1" }]} />);
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Standup"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT });
+  await userEvent.click(await screen.findByRole("button", { name: /this event/i }));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(expect.objectContaining({ eventId: "occ1", scope: "this" }));
+});
+
+test("picking 'All events' after dragging a recurring timed event sends scope 'all' plus the occurrence's original start/end and recurringEventId", async () => {
+  render(<Harness days={[oneDay]} events={[{ ...timedEvent({ id: "occ1" }), recurringEventId: "master1" }]} />);
+  const column = dayColumn();
+  stubZeroRect(column);
+  fireDragTo(screen.getByText("Standup"), column, { clientX: 0, clientY: 7 * HOUR_ROW_HEIGHT });
+  await userEvent.click(await screen.findByRole("button", { name: /all events/i }));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({
+      scope: "all", recurringEventId: "master1",
+      occurrenceOriginalStart: "2026-10-20T09:00:00-04:00", occurrenceOriginalEnd: expect.any(String),
+    }),
   );
 });

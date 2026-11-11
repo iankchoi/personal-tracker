@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
 const { mockRefresh, mockUpdateEventAction, mockUpdateTaskAction, mockCompleteTaskAction } = vi.hoisted(() => ({
@@ -222,6 +223,51 @@ test("a failed drop shows an inline error and leaves the event where it was", as
   fireDragTo(screen.getByText("Standup"), "2026-10-25");
   await vi.waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t reschedule/i));
   expect(screen.getByText("Standup")).toBeInTheDocument(); // still rendered from unchanged props
+});
+
+test("a recurring event's month chip shows the repeat icon", () => {
+  render(<Harness events={[{ ...timedEvent({ id: "occ1", start: "2026-10-20T09:00:00-04:00" }), recurringEventId: "master1" }]} />);
+  expect(screen.getByTestId("mg-chip-repeat-icon")).toBeInTheDocument();
+});
+
+test("a one-off event's month chip shows no repeat icon", () => {
+  render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
+  expect(screen.queryByTestId("mg-chip-repeat-icon")).not.toBeInTheDocument();
+});
+
+test("dragging a recurring event's chip shows the scope dialog instead of saving immediately", async () => {
+  render(<Harness events={[{ ...timedEvent({ id: "occ1", start: "2026-10-20T09:00:00-04:00" }), recurringEventId: "master1" }]} />);
+  fireDragTo(screen.getByText("Standup"), "2026-10-25");
+  expect(await screen.findByRole("button", { name: /all events/i })).toBeInTheDocument();
+  expect(mockUpdateEventAction).not.toHaveBeenCalled();
+});
+
+test("picking 'This event' after dragging a recurring event sends scope 'this' and the dragged occurrence's own id", async () => {
+  render(<Harness events={[{ ...timedEvent({ id: "occ1", start: "2026-10-20T09:00:00-04:00" }), recurringEventId: "master1" }]} />);
+  fireDragTo(screen.getByText("Standup"), "2026-10-25");
+  await userEvent.click(await screen.findByRole("button", { name: /this event/i }));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(expect.objectContaining({ eventId: "occ1", scope: "this" }));
+});
+
+test("picking 'All events' after dragging a recurring event sends scope 'all' plus the occurrence's original start/end and recurringEventId", async () => {
+  render(<Harness events={[{ ...timedEvent({ id: "occ1", start: "2026-10-20T09:00:00-04:00" }), recurringEventId: "master1" }]} />);
+  fireDragTo(screen.getByText("Standup"), "2026-10-25");
+  await userEvent.click(await screen.findByRole("button", { name: /all events/i }));
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(mockUpdateEventAction).toHaveBeenCalledWith(
+    expect.objectContaining({
+      scope: "all", recurringEventId: "master1",
+      occurrenceOriginalStart: "2026-10-20T09:00:00-04:00", occurrenceOriginalEnd: expect.any(String),
+    }),
+  );
+});
+
+test("dragging a one-off event never shows the scope dialog", async () => {
+  render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
+  fireDragTo(screen.getByText("Standup"), "2026-10-25");
+  await vi.waitFor(() => expect(mockUpdateEventAction).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: /all events/i })).not.toBeInTheDocument();
 });
 
 test("rendering an event month chip never leaks usePointerDrag's isDragging onto the DOM", () => {

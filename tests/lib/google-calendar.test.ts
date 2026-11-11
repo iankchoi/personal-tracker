@@ -4,6 +4,7 @@ import {
   createEvent,
   deleteEvent,
   filterWritableCalendars,
+  getEvent,
   listCalendars,
   listEvents,
   updateEvent,
@@ -218,6 +219,39 @@ test("deleteEvent throws on a non-ok response", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
 
   await expect(deleteEvent("tok", "primary", "evt1")).rejects.toThrow();
+});
+
+test("getEvent fetches a single event and stamps calendarId onto it", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      id: "master1",
+      summary: "Standup",
+      start: { dateTime: "2026-11-11T09:00:00-05:00" },
+      end: { dateTime: "2026-11-11T09:30:00-05:00" },
+      recurrence: ["RRULE:FREQ=WEEKLY"],
+    }),
+  }));
+
+  const event = await getEvent("token", "primary", "master1");
+
+  expect(event).toEqual(
+    expect.objectContaining({
+      id: "master1",
+      calendarId: "primary",
+      recurrence: ["RRULE:FREQ=WEEKLY"],
+    }),
+  );
+  expect(fetch).toHaveBeenCalledWith(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events/master1",
+    expect.objectContaining({ headers: { Authorization: "Bearer token" } }),
+  );
+});
+
+test("getEvent throws on a non-ok response", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+  await expect(getEvent("token", "primary", "missing")).rejects.toThrow(/404/);
 });
 
 test("filterWritableCalendars keeps owner and writer calendars, drops reader and freeBusyReader, and keeps an entry with no accessRole at all", () => {

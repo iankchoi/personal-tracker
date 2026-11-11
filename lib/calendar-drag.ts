@@ -5,19 +5,19 @@ import type { CalendarTaskItem } from "./calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "./google-calendar";
 
 /** Whole-day offset from `from` to `to`, both plain local-midnight calendar dates. */
-function dayDelta(from: Date, to: Date): number {
+export function dayDelta(from: Date, to: Date): number {
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
   return Math.round((to.getTime() - from.getTime()) / MS_PER_DAY);
 }
 
 /** The ISO 8601 UTC-offset suffix on an offset-carrying date-time string (e.g. `"-04:00"` or `"Z"`). */
-function extractOffset(isoDateTime: string): string {
+export function extractOffset(isoDateTime: string): string {
   const match = isoDateTime.match(/([+-]\d{2}:\d{2}|Z)$/);
   return match ? match[0] : "Z";
 }
 
 /** The offset suffix's value in minutes east of UTC (e.g. `"-04:00"` -> `-240`, `"Z"` -> `0`). */
-function offsetToMinutes(offset: string): number {
+export function offsetToMinutes(offset: string): number {
   if (offset === "Z") {
     return 0;
   }
@@ -50,7 +50,7 @@ function shiftDateTime(isoDateTime: string, delta: number): string {
 }
 
 /** Re-formats a bare `YYYY-MM-DD` date string onto a different calendar day. */
-function shiftDateString(dateStr: string, delta: number): string {
+export function shiftDateString(dateStr: string, delta: number): string {
   const [year, month, day] = dateStr.split("-").map(Number);
   return formatDateParam(addDays(new Date(year, month - 1, day), delta));
 }

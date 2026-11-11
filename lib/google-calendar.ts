@@ -10,8 +10,12 @@ export type GoogleCalendarEvent = {
   id: string;
   calendarId: string;
   summary: string;
-  start: { dateTime?: string; date?: string };
-  end: { dateTime?: string; date?: string };
+  // `timeZone` is the IANA zone (e.g. "America/New_York") a `recurrence`
+  // pattern expands in — Google's API documents it as required whenever an
+  // event carries `recurrence`, since it's what the rule's DST transitions
+  // resolve against. Absent on a one-off event.
+  start: { dateTime?: string; date?: string; timeZone?: string };
+  end: { dateTime?: string; date?: string; timeZone?: string };
   recurringEventId?: string;
   recurrence?: string[];
   colorId?: string;
@@ -216,6 +220,34 @@ export async function updateEvent(
 
   if (!response.ok) {
     throw new Error(`Google updateEvent request failed with status ${response.status}`);
+  }
+
+  const data = (await response.json()) as Omit<GoogleCalendarEvent, "calendarId">;
+  return { ...data, calendarId };
+}
+
+/**
+ * Fetches a single event from the specified calendar. Stamps `calendarId`
+ * onto the returned object. Throws on a non-ok response.
+ *
+ * Used to read a recurring series' master event before computing a scope-aware
+ * write (e.g. "update this instance", "update this and following", "update all").
+ */
+export async function getEvent(
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+): Promise<GoogleCalendarEvent> {
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Google getEvent request failed with status ${response.status}`);
   }
 
   const data = (await response.json()) as Omit<GoogleCalendarEvent, "calendarId">;

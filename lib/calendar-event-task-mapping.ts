@@ -31,12 +31,13 @@ import type { GoogleCalendarEvent } from "./google-calendar";
  */
 export function googleEventToEditorInitial(
   event: GoogleCalendarEvent,
-): Partial<EventActionInput> & { eventId: string; calendarId: string } {
+): Partial<EventActionInput> & { eventId: string; calendarId: string; recurringEventId?: string } {
   const allDay = event.start.date != null;
 
   return {
     eventId: event.id,
     calendarId: event.calendarId,
+    recurringEventId: event.recurringEventId,
     title: event.summary,
     start: allDay ? event.start.date : event.start.dateTime,
     end: allDay

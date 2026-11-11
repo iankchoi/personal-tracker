@@ -15,7 +15,7 @@ import {
   isSameLocalMonth,
   parseDateParam,
 } from "@/lib/calendar-dates";
-import type { EventActionInput } from "@/lib/actions/calendar-events";
+import type { EventActionInput, RecurrenceEditScope } from "@/lib/actions/calendar-events";
 import type { TaskActionInput } from "@/lib/actions/calendar-tasks";
 import { getEventsForDay, getTasksForDay } from "@/lib/calendar-day-items";
 import { shiftEventToDay, shiftTaskToDay, withoutEventClobberFields } from "@/lib/calendar-drag";
@@ -26,8 +26,10 @@ import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 import type { GoogleTaskList } from "@/lib/google-tasks";
 
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
+import { RecurrenceScopeDialog } from "./RecurrenceScopeDialog";
 import { TaskCheckbox } from "./TaskCheckbox";
 import { usePointerDrag } from "./usePointerDrag";
+import { RepeatIcon } from "./CalendarIcons";
 
 /** Resolves a pointer position to the `.mg-cell` underneath it (via its `data-day`), or `null` if the pointer is over no cell at all — the pointer-event replacement for native DnD's drop-target element. */
 function dayFromPoint(clientX: number, clientY: number): Date | null {
@@ -104,6 +106,7 @@ function MonthEventChip({
       }}
     >
       {event.start.dateTime && <span className="mg-chip-time">{formatTimeLabel(event.start.dateTime)}</span>}
+      {event.recurringEventId && <span className="mg-chip-icon" data-testid="mg-chip-repeat-icon">{RepeatIcon}</span>}
       {event.summary}
     </span>
   );
@@ -205,6 +208,59 @@ export function MonthView({
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null);
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
+  // Set instead of saving immediately when a dragged event's
+  // `recurringEventId` is set — holds the event and its already-computed
+  // shifted start/end until the user picks a scope in RecurrenceScopeDialog.
+  const [pendingScopeDrop, setPendingScopeDrop] = useState<{
+    event: GoogleCalendarEvent;
+    shifted: { start: string; end: string };
+  } | null>(null);
+
+  /**
+   * Shared save path for both an immediate (one-off) drop and a scope-chosen
+   * (recurring) drop: `scope` is only passed in the latter case, alongside
+   * the fields `updateEventAction` needs to resolve the series and shift it —
+   * see Task 3's `updateEventAction` for why both start AND end are required
+   * once a scope is given.
+   */
+  async function saveEventDrop(
+    event: GoogleCalendarEvent,
+    shifted: { start: string; end: string },
+    scope?: RecurrenceEditScope,
+  ) {
+    const mapped = googleEventToEditorInitial(event) as EventActionInput & { eventId: string };
+    try {
+      await updateEventAction({
+        ...withoutEventClobberFields(mapped),
+        ...shifted,
+        ...(scope
+          ? {
+              scope,
+              recurringEventId: event.recurringEventId,
+              occurrenceOriginalStart: event.start.dateTime ?? event.start.date,
+              occurrenceOriginalEnd: event.end.dateTime ?? event.end.date,
+            }
+          : {}),
+      });
+      setDragError(null);
+      router.refresh();
+    } catch {
+      setDragError("Couldn't reschedule that event.");
+    }
+  }
+
+  function handleScopeChoice(scope: RecurrenceEditScope) {
+    const pending = pendingScopeDrop;
+    setPendingScopeDrop(null);
+    if (!pending) {
+      return;
+    }
+    void saveEventDrop(pending.event, pending.shifted, scope);
+  }
+
+  function handleScopeCancel() {
+    setPendingScopeDrop(null);
+  }
 
   async function handleDrop(day: Date) {
     setDragOverDay(null);
@@ -218,17 +274,12 @@ export function MonthView({
       if (isSameLocalDay(payload.grabDay, day)) {
         return;
       }
-      const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
-      try {
-        await updateEventAction({
-          ...withoutEventClobberFields(mapped),
-          ...shiftEventToDay(payload.event, payload.grabDay, day),
-        });
-        setDragError(null);
-        router.refresh();
-      } catch {
-        setDragError("Couldn't reschedule that event.");
+      const shifted = shiftEventToDay(payload.event, payload.grabDay, day);
+      if (payload.event.recurringEventId) {
+        setPendingScopeDrop({ event: payload.event, shifted });
+        return;
       }
+      await saveEventDrop(payload.event, shifted);
     } else {
       if (formatDateParam(day) === payload.task.dueDate) {
         return;
@@ -268,6 +319,9 @@ export function MonthView({
 
   return (
     <div className="month-grid">
+      {pendingScopeDrop && (
+        <RecurrenceScopeDialog allowThisEvent={true} onChoose={handleScopeChoice} onCancel={handleScopeCancel} />
+      )}
       {dragError && (
         <div className="error-block" role="alert">
           {dragError}

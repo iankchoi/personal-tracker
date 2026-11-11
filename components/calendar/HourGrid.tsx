@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type CSSProperties } from "react";
 
-import type { EventActionInput } from "@/lib/actions/calendar-events";
+import type { EventActionInput, RecurrenceEditScope } from "@/lib/actions/calendar-events";
 import { updateEventAction } from "@/lib/actions/calendar-events";
 import type { TaskActionInput } from "@/lib/actions/calendar-tasks";
 import { updateTaskAction } from "@/lib/actions/calendar-tasks";
@@ -38,8 +38,10 @@ import type { CalendarTaskItem } from "@/lib/calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
+import { RecurrenceScopeDialog } from "./RecurrenceScopeDialog";
 import { TaskCheckbox } from "./TaskCheckbox";
 import { usePointerDrag } from "./usePointerDrag";
+import { RepeatIcon } from "./CalendarIcons";
 
 /**
  * Resolves a pointer position to the lane and day underneath it — the
@@ -117,6 +119,7 @@ function AllDayEventChip({
         onPointerCancel();
       }}
     >
+      {event.recurringEventId && <span className="wg-chip-icon" data-testid="wg-event-repeat-icon">{RepeatIcon}</span>}
       {event.summary}
     </span>
   );
@@ -163,6 +166,7 @@ function TimedEventBlock({
         onPointerCancel();
       }}
     >
+      {event.recurringEventId && <span className="wg-event-icon" data-testid="wg-event-repeat-icon">{RepeatIcon}</span>}
       <span className="et">{event.summary}</span>
       {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
       <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>
@@ -379,6 +383,62 @@ export function HourGrid({
   // platform. `null` whenever the pointer isn't over a timed column.
   const [dragPreviewHour, setDragPreviewHour] = useState<number | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
+  // Set instead of saving immediately when a dragged event's
+  // `recurringEventId` is set — holds the event and its already-computed
+  // shifted start/end until the user picks a scope in RecurrenceScopeDialog.
+  // Shared by both the all-day lane and the timed grid, since a choice
+  // resolves to the exact same save regardless of which lane it was dragged
+  // from.
+  const [pendingScopeDrop, setPendingScopeDrop] = useState<{
+    event: GoogleCalendarEvent;
+    shifted: { start: string; end: string };
+  } | null>(null);
+
+  /**
+   * Shared save path for both an immediate (one-off) drop and a scope-chosen
+   * (recurring) drop: `scope` is only passed in the latter case, alongside
+   * the fields `updateEventAction` needs to resolve the series and shift it —
+   * see Task 3's `updateEventAction` for why both start AND end are required
+   * once a scope is given.
+   */
+  async function saveEventDrop(
+    event: GoogleCalendarEvent,
+    shifted: { start: string; end: string },
+    scope?: RecurrenceEditScope,
+  ) {
+    const mapped = googleEventToEditorInitial(event) as EventActionInput & { eventId: string };
+    try {
+      await updateEventAction({
+        ...withoutEventClobberFields(mapped),
+        ...shifted,
+        ...(scope
+          ? {
+              scope,
+              recurringEventId: event.recurringEventId,
+              occurrenceOriginalStart: event.start.dateTime ?? event.start.date,
+              occurrenceOriginalEnd: event.end.dateTime ?? event.end.date,
+            }
+          : {}),
+      });
+      setDragError(null);
+      router.refresh();
+    } catch {
+      setDragError("Couldn't reschedule that event.");
+    }
+  }
+
+  function handleScopeChoice(scope: RecurrenceEditScope) {
+    const pending = pendingScopeDrop;
+    setPendingScopeDrop(null);
+    if (!pending) {
+      return;
+    }
+    void saveEventDrop(pending.event, pending.shifted, scope);
+  }
+
+  function handleScopeCancel() {
+    setPendingScopeDrop(null);
+  }
 
   async function handleAllDayDrop(day: Date) {
     setDragOverKey(null);
@@ -396,17 +456,12 @@ export function HourGrid({
       if (isSameLocalDay(payload.grabDay, day)) {
         return;
       }
-      const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
-      try {
-        await updateEventAction({
-          ...withoutEventClobberFields(mapped),
-          ...shiftEventToDay(payload.event, payload.grabDay, day),
-        });
-        setDragError(null);
-        router.refresh();
-      } catch {
-        setDragError("Couldn't reschedule that event.");
+      const shifted = shiftEventToDay(payload.event, payload.grabDay, day);
+      if (payload.event.recurringEventId) {
+        setPendingScopeDrop({ event: payload.event, shifted });
+        return;
       }
+      await saveEventDrop(payload.event, shifted);
     } else {
       // Already an all-day task on this same day — no change to make.
       if (payload.task.dueDate === formatDateParam(day) && payload.task.dueTime === null) {
@@ -438,17 +493,12 @@ export function HourGrid({
       if (!payload.event.start.dateTime) {
         return;
       }
-      const mapped = googleEventToEditorInitial(payload.event) as EventActionInput & { eventId: string };
-      try {
-        await updateEventAction({
-          ...withoutEventClobberFields(mapped),
-          ...moveEventToSlot(payload.event, day, targetHour),
-        });
-        setDragError(null);
-        router.refresh();
-      } catch {
-        setDragError("Couldn't reschedule that event.");
+      const shifted = moveEventToSlot(payload.event, day, targetHour);
+      if (payload.event.recurringEventId) {
+        setPendingScopeDrop({ event: payload.event, shifted });
+        return;
       }
+      await saveEventDrop(payload.event, shifted);
     } else {
       const mapped = calendarTaskToEditorInitial(payload.task) as TaskActionInput & { taskId: string };
       try {
@@ -509,6 +559,9 @@ export function HourGrid({
 
   return (
     <>
+      {pendingScopeDrop && (
+        <RecurrenceScopeDialog allowThisEvent={true} onChoose={handleScopeChoice} onCancel={handleScopeCancel} />
+      )}
       {dragError && (
         <div className="error-block" role="alert">
           {dragError}

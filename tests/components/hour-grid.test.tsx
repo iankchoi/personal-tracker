@@ -373,3 +373,28 @@ test("dragging a timed task into the all-day row clears its dueTime", async () =
     expect(mockUpdateTaskAction).toHaveBeenCalledWith(expect.objectContaining({ taskId: "t1", dueTime: null })),
   );
 });
+
+test("a recurring all-day event's chip shows the repeat icon", () => {
+  render(
+    <Harness
+      days={sevenDays}
+      events={[{ ...allDayEvent({ id: "occ1", start: "2026-10-20", end: "2026-10-21" }), recurringEventId: "master1" }]}
+    />
+  );
+  expect(screen.getByTestId("wg-event-repeat-icon")).toBeInTheDocument();
+});
+
+test("a non-recurring all-day event's chip shows no repeat icon", () => {
+  render(<Harness days={sevenDays} events={[allDayEvent({ id: "e1", start: "2026-10-20", end: "2026-10-21" })]} />);
+  expect(screen.queryByTestId("wg-event-repeat-icon")).not.toBeInTheDocument();
+});
+
+test("a recurring timed event block shows the repeat icon", () => {
+  render(<Harness days={[oneDay]} events={[{ ...timedEvent({ id: "occ1" }), recurringEventId: "master1" }]} />);
+  expect(screen.getByTestId("wg-event-repeat-icon")).toBeInTheDocument();
+});
+
+test("a non-recurring timed event block shows no repeat icon", () => {
+  render(<Harness days={[oneDay]} events={[timedEvent({ id: "e1" })] } />);
+  expect(screen.queryByTestId("wg-event-repeat-icon")).not.toBeInTheDocument();
+});

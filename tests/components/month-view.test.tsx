@@ -224,6 +224,16 @@ test("a failed drop shows an inline error and leaves the event where it was", as
   expect(screen.getByText("Standup")).toBeInTheDocument(); // still rendered from unchanged props
 });
 
+test("a recurring event's month chip shows the repeat icon", () => {
+  render(<Harness events={[{ ...timedEvent({ id: "occ1", start: "2026-10-20T09:00:00-04:00" }), recurringEventId: "master1" }]} />);
+  expect(screen.getByTestId("mg-chip-repeat-icon")).toBeInTheDocument();
+});
+
+test("a one-off event's month chip shows no repeat icon", () => {
+  render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);
+  expect(screen.queryByTestId("mg-chip-repeat-icon")).not.toBeInTheDocument();
+});
+
 test("rendering an event month chip never leaks usePointerDrag's isDragging onto the DOM", () => {
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
   render(<Harness events={[timedEvent({ id: "e1", start: "2026-10-20T09:00:00-04:00" })]} />);

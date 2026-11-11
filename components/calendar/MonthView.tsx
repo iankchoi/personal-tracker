@@ -28,6 +28,7 @@ import type { GoogleTaskList } from "@/lib/google-tasks";
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
 import { usePointerDrag } from "./usePointerDrag";
+import { RepeatIcon } from "./CalendarIcons";
 
 /** Resolves a pointer position to the `.mg-cell` underneath it (via its `data-day`), or `null` if the pointer is over no cell at all — the pointer-event replacement for native DnD's drop-target element. */
 function dayFromPoint(clientX: number, clientY: number): Date | null {
@@ -104,6 +105,7 @@ function MonthEventChip({
       }}
     >
       {event.start.dateTime && <span className="mg-chip-time">{formatTimeLabel(event.start.dateTime)}</span>}
+      {event.recurringEventId && <span className="mg-chip-icon" data-testid="mg-chip-repeat-icon">{RepeatIcon}</span>}
       {event.summary}
     </span>
   );

@@ -40,6 +40,7 @@ import type { GoogleCalendarEvent } from "@/lib/google-calendar";
 import { useCalendarInteraction } from "./CalendarInteractionProvider";
 import { TaskCheckbox } from "./TaskCheckbox";
 import { usePointerDrag } from "./usePointerDrag";
+import { RepeatIcon } from "./CalendarIcons";
 
 /**
  * Resolves a pointer position to the lane and day underneath it — the
@@ -117,6 +118,7 @@ function AllDayEventChip({
         onPointerCancel();
       }}
     >
+      {event.recurringEventId && <span className="wg-chip-icon" data-testid="wg-event-repeat-icon">{RepeatIcon}</span>}
       {event.summary}
     </span>
   );
@@ -163,6 +165,7 @@ function TimedEventBlock({
         onPointerCancel();
       }}
     >
+      {event.recurringEventId && <span className="wg-event-icon" data-testid="wg-event-repeat-icon">{RepeatIcon}</span>}
       <span className="et">{event.summary}</span>
       {/* layoutTimedEvents only returns events with a timed start, so dateTime is non-null. */}
       <span className="es">{formatTimeLabel(event.start.dateTime as string)}</span>

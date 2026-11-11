@@ -10,6 +10,7 @@ import type { GoogleCalendarListEntry } from "../../lib/google-calendar";
 
 import { ColorPicker } from "./ColorPicker";
 import { LocationAutocomplete } from "./LocationAutocomplete";
+import { RepeatIcon } from "./CalendarIcons";
 
 /** Icons match the sidebar's inline-SVG style exactly: `viewBox="0 0 24 24"`, 16x16 via CSS, `stroke-width: 1.6`, `stroke: currentColor`, no fill. */
 const ClockIcon = (
@@ -22,14 +23,6 @@ const CalendarIcon = (
   <svg viewBox="0 0 24 24">
     <rect x="3" y="4" width="18" height="18" rx="2" />
     <path d="M3 10h18M8 2v4M16 2v4" />
-  </svg>
-);
-const RepeatIcon = (
-  <svg viewBox="0 0 24 24">
-    <path d="M17 1l4 4-4 4" />
-    <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-    <path d="M7 23l-4-4 4-4" />
-    <path d="M21 13v2a4 4 0 0 1-4 4H3" />
   </svg>
 );
 const PinIcon = (

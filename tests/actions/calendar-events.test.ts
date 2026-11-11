@@ -1,12 +1,14 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
-const { mockAuth, mockGetGoogleAccessToken, mockCreateEvent, mockUpdateEvent, mockDeleteEvent } = vi.hoisted(() => ({
-  mockAuth: vi.fn(),
-  mockGetGoogleAccessToken: vi.fn(),
-  mockCreateEvent: vi.fn(),
-  mockUpdateEvent: vi.fn(),
-  mockDeleteEvent: vi.fn(),
-}));
+const { mockAuth, mockGetGoogleAccessToken, mockCreateEvent, mockUpdateEvent, mockDeleteEvent, mockGetEvent } =
+  vi.hoisted(() => ({
+    mockAuth: vi.fn(),
+    mockGetGoogleAccessToken: vi.fn(),
+    mockCreateEvent: vi.fn(),
+    mockUpdateEvent: vi.fn(),
+    mockDeleteEvent: vi.fn(),
+    mockGetEvent: vi.fn(),
+  }));
 
 vi.mock("../../auth", () => ({ auth: mockAuth }));
 vi.mock("../../lib/google-token", () => ({ getGoogleAccessToken: mockGetGoogleAccessToken }));
@@ -14,9 +16,11 @@ vi.mock("../../lib/google-calendar", () => ({
   createEvent: mockCreateEvent,
   updateEvent: mockUpdateEvent,
   deleteEvent: mockDeleteEvent,
+  getEvent: mockGetEvent,
 }));
 
 import { colorIdForToken } from "../../lib/calendar-event-colors";
+import { truncateRRuleBefore } from "../../lib/calendar-recurrence";
 import {
   createEventAction,
   deleteEventAction,
@@ -41,6 +45,7 @@ beforeEach(() => {
   mockCreateEvent.mockReset();
   mockUpdateEvent.mockReset();
   mockDeleteEvent.mockReset();
+  mockGetEvent.mockReset();
 });
 
 test("createEventAction builds the Google event payload from the input and returns its id", async () => {
@@ -167,10 +172,10 @@ test("createEventAction passes description and location through", async () => {
   );
 });
 
-test("updateEventAction calls updateEvent with the given eventId regardless of scope", async () => {
+test("updateEventAction calls updateEvent with the given eventId when scope is absent", async () => {
   mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
 
-  const result = await updateEventAction({ ...baseInput(), eventId: "evt1", scope: "all" });
+  const result = await updateEventAction({ ...baseInput(), eventId: "evt1" });
 
   expect(result).toEqual({ id: "evt1" });
   expect(mockUpdateEvent).toHaveBeenCalledWith(
@@ -229,10 +234,214 @@ test("updateEventAction omits conferenceData when addGoogleMeet is absent, keepi
   expect(mockUpdateEvent.mock.calls[0][3].conferenceData).toBeUndefined();
 });
 
-test("deleteEventAction calls deleteEvent with the given calendarId and eventId", async () => {
+test("deleteEventAction calls deleteEvent with the given calendarId and eventId when scope is absent", async () => {
   mockDeleteEvent.mockResolvedValue(undefined);
 
-  await deleteEventAction({ calendarId: "primary", eventId: "evt1", scope: "following" });
+  await deleteEventAction({ calendarId: "primary", eventId: "evt1" });
 
   expect(mockDeleteEvent).toHaveBeenCalledWith("test-token", "primary", "evt1");
+});
+
+test("updateEventAction with scope 'this' patches exactly the given eventId, same as no scope at all", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "occ1", calendarId: "primary" });
+  await updateEventAction({ ...baseInput(), eventId: "occ1", scope: "this" });
+  expect(mockUpdateEvent).toHaveBeenCalledWith("test-token", "primary", "occ1", expect.anything());
+});
+
+test("deleteEventAction with scope 'this' deletes exactly the given eventId", async () => {
+  await deleteEventAction({ calendarId: "primary", eventId: "occ1", scope: "this" });
+  expect(mockDeleteEvent).toHaveBeenCalledWith("test-token", "primary", "occ1");
+});
+
+test("updateEventAction with scope 'all' resolves the master via recurringEventId and PATCHes it instead", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-25T10:00:00-05:00", end: "2026-11-25T10:30:00-05:00" }),
+    eventId: "occ3", scope: "all", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockGetEvent).toHaveBeenCalledWith("test-token", "primary", "master1");
+  // Master is stored at -05:00 (09:00/09:30 local = 14:00/14:30 UTC); the
+  // drag's delta is +1 hour (09:00 -> 10:00 local on the occurrence);
+  // applying that same +1h delta to the master's absolute instant gives
+  // 15:00/15:30 UTC.
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({
+      start: { dateTime: "2026-11-11T15:00:00.000Z" },
+      end: { dateTime: "2026-11-11T15:30:00.000Z" },
+    }),
+  );
+});
+
+test("updateEventAction with scope 'all' on an all-day event shifts the master's date fields by the same day delta", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary", start: { date: "2026-11-11" }, end: { date: "2026-11-12" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ allDay: true, start: "2026-11-26", end: "2026-11-27" }),
+    eventId: "occ3", scope: "all", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25", occurrenceOriginalEnd: "2026-11-26",
+  });
+
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({ start: { date: "2026-11-12" }, end: { date: "2026-11-13" } }),
+  );
+});
+
+test("updateEventAction with scope 'all' and no recurringEventId treats the given eventId as the master itself", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-11T09:00:00-05:00", end: "2026-11-11T09:30:00-05:00" }),
+    eventId: "master1", scope: "all",
+    occurrenceOriginalStart: "2026-11-11T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-11T09:30:00-05:00",
+  });
+
+  expect(mockGetEvent).toHaveBeenCalledWith("test-token", "primary", "master1");
+});
+
+test("deleteEventAction with scope 'all' resolves the master via recurringEventId and deletes it instead", async () => {
+  await deleteEventAction({
+    calendarId: "primary", eventId: "occ3", scope: "all", recurringEventId: "master1",
+  });
+
+  expect(mockDeleteEvent).toHaveBeenCalledWith("test-token", "primary", "master1");
+});
+
+test("deleteEventAction with scope 'following' truncates the master's RRULE instead of deleting anything", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary", start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+
+  await deleteEventAction({
+    calendarId: "primary", eventId: "occ3", scope: "following",
+    recurringEventId: "master1", occurrenceOriginalStart: "2026-11-25T09:00:00-05:00",
+  });
+
+  expect(mockDeleteEvent).not.toHaveBeenCalled();
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({ recurrence: [truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date(2026, 10, 25))] }),
+  );
+});
+
+test("deleteEventAction with scope 'following' on the series' first occurrence deletes the whole master instead", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary", start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+
+  await deleteEventAction({
+    calendarId: "primary", eventId: "occ1", scope: "following",
+    recurringEventId: "master1", occurrenceOriginalStart: "2026-11-11T09:00:00-05:00",
+  });
+
+  expect(mockDeleteEvent).toHaveBeenCalledWith("test-token", "primary", "master1");
+  expect(mockUpdateEvent).not.toHaveBeenCalled();
+});
+
+test("updateEventAction with scope 'following' truncates the old series and creates a new one from this occurrence", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary", summary: "Standup",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  const result = await updateEventAction({
+    ...baseInput({ title: "Standup (longer)", start: "2026-11-25T10:00:00-05:00", end: "2026-11-25T10:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({ recurrence: [truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date(2026, 10, 25))] }),
+  );
+  expect(mockCreateEvent).toHaveBeenCalledWith(
+    "test-token", "primary",
+    expect.objectContaining({
+      summary: "Standup (longer)",
+      start: { dateTime: "2026-11-25T10:00:00-05:00" },
+      end: { dateTime: "2026-11-25T10:30:00-05:00" },
+      recurrence: ["RRULE:FREQ=WEEKLY"],
+    }),
+  );
+  expect(result).toEqual({ id: "newseries1" });
+});
+
+test("updateEventAction with scope 'following' on the series' first occurrence behaves exactly like scope 'all'", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-11T10:00:00-05:00", end: "2026-11-11T10:30:00-05:00" }),
+    eventId: "occ1", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-11T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-11T09:30:00-05:00",
+  });
+
+  expect(mockCreateEvent).not.toHaveBeenCalled();
+  expect(mockUpdateEvent).toHaveBeenCalledWith("test-token", "primary", "master1", expect.anything());
+});
+
+test("updateEventAction with scope 'following' mints a fresh Meet request for the new series rather than copying the master's resolved conferenceData", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+    conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.com/old-link" }] },
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ addGoogleMeet: true, start: "2026-11-25T09:00:00-05:00", end: "2026-11-25T09:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  const createdPayload = mockCreateEvent.mock.calls[0][2];
+  expect(createdPayload.conferenceData).toEqual({ createRequest: { requestId: expect.any(String) } });
+});
+
+test("updateEventAction with scope 'following' and recurrence explicitly cleared creates a plain one-off with no recurrence field, not a new series", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "oneoff1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ recurrence: [], start: "2026-11-25T09:00:00-05:00", end: "2026-11-25T09:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  const createdPayload = mockCreateEvent.mock.calls[0][2];
+  expect(createdPayload.recurrence).toBeUndefined();
 });

@@ -5,7 +5,7 @@ import type { CalendarTaskItem } from "./calendar-tasks-for-grid";
 import type { GoogleCalendarEvent } from "./google-calendar";
 
 /** Whole-day offset from `from` to `to`, both plain local-midnight calendar dates. */
-function dayDelta(from: Date, to: Date): number {
+export function dayDelta(from: Date, to: Date): number {
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
   return Math.round((to.getTime() - from.getTime()) / MS_PER_DAY);
 }
@@ -50,7 +50,7 @@ function shiftDateTime(isoDateTime: string, delta: number): string {
 }
 
 /** Re-formats a bare `YYYY-MM-DD` date string onto a different calendar day. */
-function shiftDateString(dateStr: string, delta: number): string {
+export function shiftDateString(dateStr: string, delta: number): string {
   const [year, month, day] = dateStr.split("-").map(Number);
   return formatDateParam(addDays(new Date(year, month - 1, day), delta));
 }

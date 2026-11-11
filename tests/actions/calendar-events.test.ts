@@ -339,7 +339,7 @@ test("deleteEventAction with scope 'following' truncates the master's RRULE inst
   expect(mockDeleteEvent).not.toHaveBeenCalled();
   expect(mockUpdateEvent).toHaveBeenCalledWith(
     "test-token", "primary", "master1",
-    expect.objectContaining({ recurrence: [truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date(2026, 10, 25))] }),
+    expect.objectContaining({ recurrence: [truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date("2026-11-25T09:00:00-05:00"))] }),
   );
 });
 
@@ -375,7 +375,7 @@ test("updateEventAction with scope 'following' truncates the old series and crea
 
   expect(mockUpdateEvent).toHaveBeenCalledWith(
     "test-token", "primary", "master1",
-    expect.objectContaining({ recurrence: [truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date(2026, 10, 25))] }),
+    expect.objectContaining({ recurrence: [truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date("2026-11-25T09:00:00-05:00"))] }),
   );
   expect(mockCreateEvent).toHaveBeenCalledWith(
     "test-token", "primary",
@@ -383,7 +383,11 @@ test("updateEventAction with scope 'following' truncates the old series and crea
       summary: "Standup (longer)",
       start: { dateTime: "2026-11-25T10:00:00-05:00" },
       end: { dateTime: "2026-11-25T10:30:00-05:00" },
-      recurrence: ["RRULE:FREQ=WEEKLY"],
+      // The master's rule had no BYDAY at all, which `correctWeeklyByDay`
+      // treats as round-trippable — it now gets an explicit BYDAY matching
+      // this occurrence's own weekday (Wednesday), rather than being copied
+      // verbatim with no weekday pinned down at all.
+      recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=WE"],
     }),
   );
   expect(result).toEqual({ id: "newseries1" });
@@ -529,7 +533,7 @@ test("deleteEventAction with scope 'following' preserves a non-RRULE line (e.g. 
   expect(mockUpdateEvent).toHaveBeenCalledWith(
     "test-token", "primary", "master1",
     expect.objectContaining({
-      recurrence: ["EXDATE:20261118T140000Z", truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date(2026, 10, 25))],
+      recurrence: ["EXDATE:20261118T140000Z", truncateRRuleBefore("RRULE:FREQ=WEEKLY", new Date("2026-11-25T09:00:00-05:00"))],
     }),
   );
 });
@@ -576,4 +580,152 @@ test("updateEventAction with scope 'following' creates the new series before tru
   });
 
   expect(mockCreateEvent.mock.invocationCallOrder[0]).toBeLessThan(mockUpdateEvent.mock.invocationCallOrder[0]);
+});
+
+// --- Final review fix round: Critical 1/2, Important I1 — shared BYDAY-correction helper ---
+
+test("updateEventAction with scope 'following' corrects the new series' BYDAY when dragged onto a different weekday (not the first occurrence)", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    // 2026-11-11 is a Wednesday.
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=WE"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  // 2026-11-25 (occurrence, Wednesday) is not the master's first occurrence
+  // (2026-11-11); dragged one day later, onto Thursday 2026-11-26.
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-26T09:00:00-05:00", end: "2026-11-26T09:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockCreateEvent).toHaveBeenCalledWith(
+    "test-token", "primary",
+    expect.objectContaining({ recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=TH"] }),
+  );
+});
+
+test("updateEventAction with scope 'all' leaves a multi-weekday BYDAY rule completely unchanged when dragged to a different weekday", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-26T09:00:00-05:00", end: "2026-11-26T09:30:00-05:00" }),
+    eventId: "occ3", scope: "all", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockUpdateEvent).toHaveBeenCalledWith(
+    "test-token", "primary", "master1",
+    expect.objectContaining({ recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"] }),
+  );
+});
+
+test("updateEventAction with scope 'following' leaves a multi-weekday BYDAY rule unchanged in the new series (not collapsed to one day)", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-26T09:00:00-05:00", end: "2026-11-26T09:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockCreateEvent).toHaveBeenCalledWith(
+    "test-token", "primary",
+    expect.objectContaining({ recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"] }),
+  );
+});
+
+test("updateEventAction with scope 'following' finds the RRULE line correctly even when it's not at index 0 (an EXDATE precedes it)", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["EXDATE:20261118T140000Z", "RRULE:FREQ=WEEKLY;BYDAY=WE"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  // Not the first occurrence; dragged onto Thursday. Before the fix, this
+  // path naively took `master.recurrence[0]` as "the RRULE line" — which
+  // here is actually the EXDATE line.
+  await updateEventAction({
+    ...baseInput({ start: "2026-11-26T09:00:00-05:00", end: "2026-11-26T09:30:00-05:00" }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  expect(mockCreateEvent).toHaveBeenCalledWith(
+    "test-token", "primary",
+    expect.objectContaining({
+      recurrence: ["EXDATE:20261118T140000Z", "RRULE:FREQ=WEEKLY;BYDAY=TH"],
+    }),
+  );
+});
+
+// --- Final review fix round: Important I2 — recurring writes carry a timeZone ---
+
+test("createEventAction sets start.timeZone/end.timeZone when recurrence is non-empty, and omits the key entirely when there's no recurrence", async () => {
+  mockCreateEvent.mockResolvedValue({ id: "evtTz1", calendarId: "primary" });
+  await createEventAction(
+    baseInput({ recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"], timeZone: "America/New_York" }),
+  );
+  const recurringPayload = mockCreateEvent.mock.calls[0][2];
+  expect(typeof recurringPayload.start.timeZone).toBe("string");
+  expect(recurringPayload.start.timeZone.length).toBeGreaterThan(0);
+  expect(recurringPayload.end.timeZone).toBe(recurringPayload.start.timeZone);
+
+  mockCreateEvent.mockClear();
+  mockCreateEvent.mockResolvedValue({ id: "evtTz2", calendarId: "primary" });
+  await createEventAction(baseInput({ timeZone: "America/New_York" }));
+  const oneOffPayload = mockCreateEvent.mock.calls[0][2];
+  expect("timeZone" in oneOffPayload.start).toBe(false);
+  expect("timeZone" in oneOffPayload.end).toBe(false);
+});
+
+test("updateEventAction sets start.timeZone/end.timeZone when recurrence is non-empty (scope absent)", async () => {
+  mockUpdateEvent.mockResolvedValue({ id: "evt1", calendarId: "primary" });
+  await updateEventAction({
+    ...baseInput({ recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"], timeZone: "America/New_York" }),
+    eventId: "evt1",
+  });
+  const payload = mockUpdateEvent.mock.calls[0][3];
+  expect(typeof payload.start.timeZone).toBe("string");
+  expect(payload.start.timeZone.length).toBeGreaterThan(0);
+});
+
+test("updateEventAction with scope 'following' sets a timeZone on the new series when the master's own (continued) recurrence carries it forward", async () => {
+  mockGetEvent.mockResolvedValue({
+    id: "master1", calendarId: "primary",
+    start: { dateTime: "2026-11-11T09:00:00-05:00" }, end: { dateTime: "2026-11-11T09:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=WE"],
+  });
+  mockUpdateEvent.mockResolvedValue({ id: "master1", calendarId: "primary" });
+  mockCreateEvent.mockResolvedValue({ id: "newseries1", calendarId: "primary" });
+
+  await updateEventAction({
+    ...baseInput({
+      start: "2026-11-25T10:00:00-05:00",
+      end: "2026-11-25T10:30:00-05:00",
+      timeZone: "America/New_York",
+    }),
+    eventId: "occ3", scope: "following", recurringEventId: "master1",
+    occurrenceOriginalStart: "2026-11-25T09:00:00-05:00", occurrenceOriginalEnd: "2026-11-25T09:30:00-05:00",
+  });
+
+  const createdPayload = mockCreateEvent.mock.calls[0][2];
+  expect(createdPayload.start.timeZone).toBe("America/New_York");
+  expect(createdPayload.end.timeZone).toBe("America/New_York");
 });

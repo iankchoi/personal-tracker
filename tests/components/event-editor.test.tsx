@@ -566,3 +566,24 @@ test("the calendar picker is disabled while editing an existing event, and live 
   );
   expect(screen.getByLabelText(/calendar/i)).toBeEnabled();
 });
+
+test("saving a new event with a custom weekly recurrence sends the matching RRULE line", async () => {
+  render(
+    <EventEditor
+      mode="create"
+      initial={{ calendarId: "primary" }}
+      calendars={cals}
+      onSaved={vi.fn()}
+      onDeleted={vi.fn()}
+      onCancel={vi.fn()}
+    />,
+  );
+  await userEvent.type(screen.getByLabelText("Title"), "Change contacts");
+  await userEvent.selectOptions(screen.getByLabelText("Repeat"), "custom");
+  await userEvent.clear(screen.getByLabelText(/every/i));
+  await userEvent.type(screen.getByLabelText(/every/i), "2");
+  await userEvent.selectOptions(screen.getByLabelText(/unit/i), "weeks");
+  await userEvent.click(screen.getByText("Save"));
+  await vi.waitFor(() => expect(mockCreateEventAction).toHaveBeenCalled());
+  expect(mockCreateEventAction.mock.calls[0][0].recurrence).toEqual([expect.stringContaining("FREQ=WEEKLY;INTERVAL=2")]);
+});

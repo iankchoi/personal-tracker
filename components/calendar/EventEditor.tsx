@@ -6,10 +6,12 @@ import { useState } from "react";
 import { createEventAction, deleteEventAction, updateEventAction, type EventActionInput } from "../../lib/actions/calendar-events";
 import type { CalendarColorToken } from "../../lib/calendar-colors";
 import { allDayEndToExclusive } from "../../lib/calendar-dates";
+import { buildRRule, parseRRule, type RecurrenceRule } from "../../lib/calendar-recurrence";
 import type { GoogleCalendarListEntry } from "../../lib/google-calendar";
 
 import { ColorPicker } from "./ColorPicker";
 import { LocationAutocomplete } from "./LocationAutocomplete";
+import { RecurrenceField } from "./RecurrenceField";
 import { RepeatIcon } from "./CalendarIcons";
 
 /** Icons match the sidebar's inline-SVG style exactly: `viewBox="0 0 24 24"`, 16x16 via CSS, `stroke-width: 1.6`, `stroke: currentColor`, no fill. */
@@ -175,6 +177,10 @@ export function EventEditor(props: {
   const [guestsCanSeeOtherGuests, setGuestsCanSeeOtherGuests] = useState(initial.guestsCanSeeOtherGuests ?? true);
   const [colorToken, setColorToken] = useState<CalendarColorToken | null>(initial.colorToken ?? null);
   const [colorTouched, setColorTouched] = useState(false);
+  const [recurrence, setRecurrence] = useState<RecurrenceRule | null>(
+    initial.recurrence?.[0] ? parseRRule(initial.recurrence[0]) : null,
+  );
+  const [recurrenceTouched, setRecurrenceTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -274,6 +280,19 @@ export function EventEditor(props: {
         guestsCanModify,
         guestsCanInviteOthers,
         guestsCanSeeOtherGuests,
+        // Same `*Touched` convention as Meet/Notify/Color/Guests above: an
+        // edit that never touched Repeat sends `undefined` (leave the
+        // existing rule, or lack of one, alone). A touched field sends `[]`
+        // when cleared back to "Does not repeat" (explicitly removing any
+        // existing RRULE) or the freshly built RRULE line otherwise. The
+        // event's own start day (not `new Date()`) decides `buildRRule`'s
+        // weekly BYDAY, matching the day the event will actually recur on.
+        recurrence:
+          mode === "create" || recurrenceTouched
+            ? recurrence
+              ? [buildRRule(recurrence, allDay ? new Date(startDate) : new Date(`${startDate}T${startTime}:00`))]
+              : []
+            : undefined,
       };
 
       if (mode === "create") {
@@ -388,10 +407,13 @@ export function EventEditor(props: {
 
       <div className="ee-row">
         <span className="ee-icon">{RepeatIcon}</span>
-        {/* Does not repeat only, for this task — Part 3 of this feature makes this field live. */}
-        <select aria-label="Repeat" value="none" disabled>
-          <option value="none">Does not repeat</option>
-        </select>
+        <RecurrenceField
+          value={recurrence}
+          onChange={(rule) => {
+            setRecurrence(rule);
+            setRecurrenceTouched(true);
+          }}
+        />
       </div>
 
       <div className="ee-row">

@@ -305,8 +305,13 @@ test("updateEventAction with scope 'all' resolves the master via recurringEventI
   expect(mockUpdateEvent).toHaveBeenCalledWith(
     "test-token", "primary", "master1",
     expect.objectContaining({
-      start: { dateTime: "2026-11-11T10:00:00.000Z" },
-      end: { dateTime: "2026-11-11T10:30:00.000Z" },
+      // Master is stored at -05:00: 09:00/09:30 local = 14:00/14:30 UTC. The occurrence's
+      // drag shifted it by +1 hour (09:00->10:00 local); applying that same 1-hour delta to
+      // the master's absolute instant gives 15:00/15:30 UTC — NOT "10:00:00Z" (an earlier
+      // draft of this test wrongly concatenated the master's own *local* wall-clock time with
+      // a bare "Z", skipping the offset conversion entirely).
+      start: { dateTime: "2026-11-11T15:00:00.000Z" },
+      end: { dateTime: "2026-11-11T15:30:00.000Z" },
     }),
   );
 });
